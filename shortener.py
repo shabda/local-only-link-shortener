@@ -7,6 +7,8 @@ encode/decode must round-trip exactly on the corpus.
 import base64
 import zlib
 
+from urldict import DICT as URL_DICT
+
 
 def _b64u_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -53,4 +55,23 @@ class V3DeflateB64:
         return zlib.decompress(_b64u_decode(payload), wbits=-15).decode("utf-8")
 
 
-VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64()]
+class V4DictDeflateB64:
+    """Raw deflate with a pre-shared dictionary, then base64url.
+
+    Both encoder and decoder agree on URL_DICT, which seeds the LZ77
+    sliding window. Common fragments like 'https://www.youtube.com/watch?v='
+    become tiny back-references from byte 1.
+    """
+    name = "v4-dict-deflate+b64url"
+
+    def encode(self, url: str) -> str:
+        c = zlib.compressobj(level=9, wbits=-15, zdict=URL_DICT)
+        data = c.compress(url.encode("utf-8")) + c.flush()
+        return _b64u_encode(data)
+
+    def decode(self, payload: str) -> str:
+        d = zlib.decompressobj(wbits=-15, zdict=URL_DICT)
+        return (d.decompress(_b64u_decode(payload)) + d.flush()).decode("utf-8")
+
+
+VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64()]
