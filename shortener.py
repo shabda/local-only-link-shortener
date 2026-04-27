@@ -7,7 +7,7 @@ encode/decode must round-trip exactly on the corpus.
 import base64
 import zlib
 
-from urldict import DICT as URL_DICT
+from urldict import DICT as URL_DICT, PREFIXES, match_prefix
 
 
 def _b64u_encode(data: bytes) -> str:
@@ -74,4 +74,34 @@ class V4DictDeflateB64:
         return (d.decompress(_b64u_decode(payload)) + d.flush()).decode("utf-8")
 
 
-VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64()]
+class V5PrefixDictDeflateB64:
+    """Replace longest known prefix with a 1-byte token, then dict-deflate.
+
+    Worth measuring even if v4's dict already references these prefixes:
+    a literal byte costs ~8 Huffman bits, an LZ77 backref costs ~9-13.
+    On a near-pure-prefix URL the token avoids the backref's length code.
+    Index 0xFF means 'no prefix matched, full URL follows'.
+    """
+    name = "v5-prefix+dict-deflate"
+
+    def encode(self, url: str) -> str:
+        idx, rest = match_prefix(url)
+        if idx is None:
+            payload = b"\xff" + url.encode("utf-8")
+        else:
+            payload = bytes([idx]) + rest.encode("utf-8")
+        c = zlib.compressobj(level=9, wbits=-15, zdict=URL_DICT)
+        return _b64u_encode(c.compress(payload) + c.flush())
+
+    def decode(self, payload: str) -> str:
+        d = zlib.decompressobj(wbits=-15, zdict=URL_DICT)
+        raw = d.decompress(_b64u_decode(payload)) + d.flush()
+        idx = raw[0]
+        rest = raw[1:].decode("utf-8")
+        if idx == 0xFF:
+            return rest
+        return PREFIXES[idx] + rest
+
+
+VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64(),
+            V5PrefixDictDeflateB64()]
