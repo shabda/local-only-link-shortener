@@ -15,7 +15,8 @@
       "Bash(python3 -c \"import brotli; print\\('brotli ok'\\)\")",
       "Bash(python3 -c ' *)",
       "Bash(python3 -m pip install --quiet brotlicffi)",
-      "Bash(git commit -q -m 'v6: prefix + brotli \\(control\\) -- 0.84x, loses to v5 *)"
+      "Bash(git commit -q -m 'v6: prefix + brotli \\(control\\) -- 0.84x, loses to v5 *)",
+      "Bash(git commit -q -m 'v7: basE91 alphabet -> 0.72x, 989/1000 wins *)"
     ]
   }
 }

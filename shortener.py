@@ -9,6 +9,7 @@ import zlib
 
 import brotli
 
+import base91 as b91
 from urldict import DICT as URL_DICT, PREFIXES, match_prefix
 
 
@@ -135,5 +136,34 @@ class V6PrefixBrotliB64:
         return PREFIXES[idx] + rest
 
 
+class V7PrefixDictDeflateB91:
+    """v5 with basE91 instead of base64url. Same compression, denser alphabet.
+
+    91-char alphabet packs ~6.5 bits/char vs b64url's 6.0. ~8% shorter
+    output. Payload must live in URL fragment (#...) -- WHATWG URL spec
+    permits all 91 chars there unescaped.
+    """
+    name = "v7-prefix+dict-deflate+b91"
+
+    def encode(self, url: str) -> str:
+        idx, rest = match_prefix(url)
+        if idx is None:
+            payload = b"\xff" + url.encode("utf-8")
+        else:
+            payload = bytes([idx]) + rest.encode("utf-8")
+        c = zlib.compressobj(level=9, wbits=-15, zdict=URL_DICT)
+        return b91.encode(c.compress(payload) + c.flush())
+
+    def decode(self, payload: str) -> str:
+        d = zlib.decompressobj(wbits=-15, zdict=URL_DICT)
+        raw = d.decompress(b91.decode(payload)) + d.flush()
+        idx = raw[0]
+        rest = raw[1:].decode("utf-8")
+        if idx == 0xFF:
+            return rest
+        return PREFIXES[idx] + rest
+
+
 VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64(),
-            V5PrefixDictDeflateB64(), V6PrefixBrotliB64()]
+            V5PrefixDictDeflateB64(), V6PrefixBrotliB64(),
+            V7PrefixDictDeflateB91()]
