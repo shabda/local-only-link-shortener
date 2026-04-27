@@ -10,6 +10,7 @@ import zlib
 import brotli
 
 import base91 as b91
+import base32768 as b32k
 from urldict import DICT as URL_DICT, PREFIXES, match_prefix
 
 
@@ -164,6 +165,38 @@ class V7PrefixDictDeflateB91:
         return PREFIXES[idx] + rest
 
 
+class V8PrefixDictDeflateB32k:
+    """v5 with base32768 (Unicode 15-bits-per-char) instead of base64url.
+
+    Visible char count drops dramatically. UTF-8 byte count goes UP
+    (each Unicode char is 3 bytes), so this trades wire bytes for
+    visible compactness -- exactly what the user sees in a chat or URL
+    bar. Both metrics are reported in bench output.
+
+    Decoder relies on raw-deflate's end marker to ignore any phantom
+    trailing byte produced by bit-stream padding.
+    """
+    name = "v8-prefix+dict-deflate+b32k"
+
+    def encode(self, url: str) -> str:
+        idx, rest = match_prefix(url)
+        if idx is None:
+            payload = b"\xff" + url.encode("utf-8")
+        else:
+            payload = bytes([idx]) + rest.encode("utf-8")
+        c = zlib.compressobj(level=9, wbits=-15, zdict=URL_DICT)
+        return b32k.encode(c.compress(payload) + c.flush())
+
+    def decode(self, payload: str) -> str:
+        d = zlib.decompressobj(wbits=-15, zdict=URL_DICT)
+        raw = d.decompress(b32k.decode(payload)) + d.flush()
+        idx = raw[0]
+        rest = raw[1:].decode("utf-8")
+        if idx == 0xFF:
+            return rest
+        return PREFIXES[idx] + rest
+
+
 VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64(),
             V5PrefixDictDeflateB64(), V6PrefixBrotliB64(),
-            V7PrefixDictDeflateB91()]
+            V7PrefixDictDeflateB91(), V8PrefixDictDeflateB32k()]
