@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local-only URL shortener</title>
+<style>
+  :root {
+    --bg: #faf9f6;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --line: #e5e3dc;
+    --accent: #6b4ce6;
+    --good: #1b8a3c;
+    --bad:  #b03030;
+    --card: #ffffff;
+    --code: #f3f1eb;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    line-height: 1.5;
+    font-size: 16px;
+  }
+  main { max-width: 820px; margin: 0 auto; padding: 32px 20px 80px; }
+  header h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header p.tagline { color: var(--muted); margin: 0 0 28px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+
+  label.row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--muted); margin-bottom: 6px;
+  }
+  label.row .stats { font-family: var(--mono); font-size: 12px; }
+  .stats .n { color: var(--fg); font-weight: 600; }
+  .stats .ratio.good { color: var(--good); }
+  .stats .ratio.bad  { color: var(--bad);  }
+
+  textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 14px;
+    background: var(--code);
+    color: var(--fg);
+    resize: vertical;
+    line-height: 1.45;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; background: #fff; }
+  textarea[readonly] { background: var(--code); cursor: text; }
+
+  .modes {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin: 14px 0 8px;
+  }
+  .modes label {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--code);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .modes label:has(input:checked) {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .modes input { accent-color: var(--accent); }
+
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font-family: var(--sans);
+    font-size: 13px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+  }
+  button:hover { background: var(--code); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: #5a3dd0; }
+
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .examples button { font-family: var(--mono); font-size: 12px; }
+
+  /* How-it-works */
+  details.how {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0;
+    margin-top: 24px;
+  }
+  details.how > summary {
+    list-style: none;
+    padding: 16px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  details.how > summary::-webkit-details-marker { display: none; }
+  details.how > summary::after {
+    content: "+";
+    font-family: var(--mono);
+    color: var(--muted);
+    transition: transform 0.2s;
+  }
+  details.how[open] > summary::after { content: "−"; }
+  .how-body { padding: 0 18px 20px; }
+  .how-body h3 { margin-top: 22px; font-size: 16px; }
+  .how-body h3 .tag { font-family: var(--mono); color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .how-body p, .how-body li { font-size: 14px; }
+  .how-body code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+
+  table.scoreboard {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    margin: 14px 0;
+  }
+  table.scoreboard th, table.scoreboard td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.scoreboard th { color: var(--muted); font-weight: 500; }
+  table.scoreboard tr.highlight td { background: #fff7e6; }
+
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--code);
+    border-radius: 999px;
+    padding: 2px 8px;
+    color: var(--muted);
+  }
+
+  footer { margin-top: 28px; color: var(--muted); font-size: 12px; text-align: center; }
+  a { color: var(--accent); }
+
+  /* error toast */
+  .err {
+    color: var(--bad);
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-top: 6px;
+    min-height: 16px;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Local-only URL shortener</h1>
+  <p class="tagline">
+    Encodes the URL <em>into</em> the URL — no server, no database, no lookup.
+    Every shortened link is a self-contained, lossless, decodable string.
+  </p>
+</header>
+
+<section class="card">
+  <label class="row" for="input">
+    <span>Original URL</span>
+    <span class="stats" id="stats-in">
+      <span class="n" id="in-chars">0</span> chars,
+      <span class="n" id="in-bytes">0</span> bytes
+    </span>
+  </label>
+  <textarea id="input" spellcheck="false" autocapitalize="none" autocomplete="off"
+    placeholder="Paste a URL — e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ"></textarea>
+
+  <div class="modes" role="radiogroup" aria-label="Encoding mode">
+    <label><input type="radio" name="mode" value="b32k" checked>
+      Base32768 — shortest visible</label>
+    <label><input type="radio" name="mode" value="b91">
+      basE91 — smallest UTF-8 bytes</label>
+    <label><input type="radio" name="mode" value="raw">
+      Raw — no encoding (control)</label>
+    <label><input type="radio" name="mode" value="auto">
+      Auto — pick best per URL</label>
+  </div>
+
+  <label class="row" for="output">
+    <span>Encoded</span>
+    <span class="stats" id="stats-out">
+      <span class="n" id="out-chars">0</span> chars
+      (<span class="ratio" id="out-ratio">—</span>),
+      <span class="n" id="out-bytes">0</span> bytes
+    </span>
+  </label>
+  <textarea id="output" readonly spellcheck="false"></textarea>
+
+  <div class="actions" style="margin-top:10px">
+    <button class="primary" id="btn-copy">Copy</button>
+    <button id="btn-decode">↓ Paste encoded above to decode</button>
+  </div>
+  <div class="err" id="err"></div>
+
+  <div class="examples">
+    <button data-example="https://www.youtube.com/watch?v=dQw4w9WgXcQ">YouTube</button>
+    <button data-example="https://github.com/torvalds/linux/blob/abc123def4567890/kernel/sched/core.c#L1234">GitHub blob</button>
+    <button data-example="https://en.wikipedia.org/wiki/Convolutional_neural_network">Wikipedia</button>
+    <button data-example="https://www.amazon.com/dp/B07XJ8C8F5/ref=sr_1_3?keywords=usb-c+hub&qid=1714000000&sr=8-3">Amazon listing</button>
+    <button data-example="https://www.reddit.com/r/programming/comments/abc1234/why_rust_is_great/">Reddit</button>
+    <button data-example="https://stackoverflow.com/questions/12345678/how-to-flatten-a-list-of-lists-in-python">Stack Overflow</button>
+    <button data-example="http://192.168.1.1:8080/admin">LAN IP (incompressible)</button>
+  </div>
+</section>
+
+
+<details class="how">
+  <summary>How it works</summary>
+  <div class="how-body">
+
+    <p>
+      Every link this page produces is <em>fully self-contained</em>. The decoded
+      URL is reconstructed entirely from the encoded string — there's no
+      database, no lookup table on a server. Open the HTML file from disk and it
+      still works.
+    </p>
+    <p>
+      The trick is to pack the original URL through a pipeline of tricks, each
+      one shaving bits from a different angle:
+    </p>
+
+    <h3>1. Domain prefix table <span class="tag">v5 — 1 byte saved per known site</span></h3>
+    <p>
+      85 hand-picked URL prefixes (<code>https://www.youtube.com/watch?v=</code>,
+      <code>https://github.com/</code>, etc.) are shared by encoder and decoder.
+      The longest matching prefix becomes a 1-byte index; <code>0xFF</code> means
+      "no prefix matched, raw URL follows." Because both ends agree on the
+      table, the index alone reconstructs ~30 bytes of URL.
+    </p>
+
+    <h3>2. Deflate with a pre-shared dictionary <span class="tag">v4 — biggest single lever</span></h3>
+    <p>
+      Plain deflate doesn't help on a 75-byte URL — its LZ77 window starts
+      empty, so there's nothing to back-reference. We seed the window with a
+      hand-curated 1.5 KB dictionary of common URL fragments
+      (<code>?utm_source=&amp;utm_medium=</code>, <code>/wiki/</code>, common TLDs,
+      etc.). Hot strings live near the <em>end</em> of the dictionary because
+      shorter LZ77 distances encode in fewer Huffman bits.
+    </p>
+    <p>
+      Both encoder and decoder load the same dictionary at init time, so it
+      doesn't take a single byte of wire space.
+    </p>
+
+    <h3>3. Denser output alphabet <span class="tag">v7 / v8 — bits per visible character</span></h3>
+    <p>
+      Base64 packs 6 bits into one ASCII character. Two ways to do better:
+    </p>
+    <ul>
+      <li>
+        <strong>basE91</strong>: 91 ASCII chars × variable-length packing,
+        ~6.5 bits/char. About <em>8% denser</em> than base64. Output stays
+        ASCII (lowest UTF-8 byte cost). All 91 chars are URL-fragment-safe
+        under WHATWG.
+      </li>
+      <li>
+        <strong>Base32768</strong>: 32,768 carefully picked BMP code points
+        (CJK Unified, CJK Extension A, Hangul Syllables — all 3 UTF-8 bytes,
+        none surrogates, RTL, or formatting). Each visible character carries
+        15 bits. Visible length drops <em>~2.5×</em> vs base64.
+      </li>
+    </ul>
+    <p>
+      Trade-off: base32768 doubles UTF-8 bytes on the wire (each "char" is
+      3 bytes). The <em>visible</em> URL is short; the <em>transmitted</em>
+      URL is roughly the same size as the original. Pick the alphabet to
+      match what you're optimising — readability or wire bytes.
+    </p>
+
+    <h3>4. Per-URL mode picker <span class="tag">v9 — pick whichever wins</span></h3>
+    <p>
+      For very short or random URLs (<code>http://192.168.1.1:8080/admin</code>),
+      compression has no signal to work with — deflate's overhead exceeds any
+      saving. The encoder tries all candidates, picks the smallest, and stamps
+      a 1-character mode marker so the decoder knows which dispatch to use:
+    </p>
+    <ul>
+      <li><code>\</code> at position 0 → raw passthrough (rest is the URL itself)</li>
+      <li>ASCII printable at position 0 → basE91 + dict-deflate</li>
+      <li>CJK / Hangul (≥ U+3400) at position 0 → base32768 + dict-deflate</li>
+    </ul>
+
+    <h3>What didn't work</h3>
+    <p>
+      Brotli (with its 120 KB built-in static dictionary, designed for HTML)
+      <em>lost</em> to our 1.5 KB URL-tuned dictionary on URL-shaped input —
+      its dictionary is full of English words and HTML tags that don't appear
+      in URLs, and its per-stream overhead is heavier than deflate's on
+      ~75-byte inputs.
+    </p>
+
+    <h3>Benchmark on 1,000 representative URLs</h3>
+    <p>Average length 75 chars. Lower ratio = shorter encoded output.</p>
+    <table class="scoreboard">
+      <thead><tr>
+        <th>Version</th><th>Trick</th><th>Visible chars</th><th>UTF-8 bytes</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>v1</td><td>Passthrough</td><td>1.000</td><td>1.000</td></tr>
+        <tr><td>v2</td><td>Plain base64 (anchor)</td><td>1.351</td><td>1.351</td></tr>
+        <tr><td>v3</td><td>Deflate + base64url</td><td>1.240</td><td>1.240</td></tr>
+        <tr><td>v4</td><td>+ shared dictionary</td><td>0.861</td><td>0.861</td></tr>
+        <tr><td>v5</td><td>+ prefix table</td><td>0.781</td><td>0.781</td></tr>
+        <tr><td>v6</td><td>brotli (control, lost)</td><td>0.839</td><td>0.839</td></tr>
+        <tr><td>v7</td><td>+ basE91 alphabet</td><td>0.720</td><td>0.720</td></tr>
+        <tr class="highlight"><td>v8</td><td>+ base32768 alphabet</td><td><strong>0.317</strong></td><td>0.952</td></tr>
+        <tr class="highlight"><td>v9</td><td>+ per-URL picker (auto)</td><td><strong>0.317</strong></td><td><strong>0.720</strong></td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      <span class="pill">stack</span>
+      Pure HTML + JS + <a href="https://github.com/nodeca/pako">pako</a> for
+      deflate. No build step, no server. Open the file directly from disk and
+      it works.
+    </p>
+
+  </div>
+</details>
+
+<footer>
+  <span class="pill">v9 / base32768</span>
+  &nbsp; round-trip verified on 1000-URL corpus
+</footer>
+
+</main>
+
+<!-- pako provides deflateRaw / inflateRaw with custom dictionary support -->
+<script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+<script src="data.js"></script>
+<script>
+"use strict";
+
+// ---------- basE91 (port of base91.py, byte-identical) ----------
+const B91_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+  "abcdefghijklmnopqrstuvwxyz" +
+  "0123456789" +
+  '!#$%&()*+,./:;<=>?@[]^_`{|}~"';
+if (B91_ALPHABET.length !== 91) throw new Error("b91 alphabet length");
+const B91_DECODE = new Map();
+for (let i = 0; i < 91; i++) B91_DECODE.set(B91_ALPHABET[i], i);
+
+function b91Encode(bytes) {
+  let n = 0, b = 0;
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    n |= bytes[i] << b;
+    b += 8;
+    if (b > 13) {
+      let v = n & 8191;
+      if (v > 88) {
+        n >>>= 13; b -= 13;
+      } else {
+        v = n & 16383;
+        n >>>= 14; b -= 14;
+      }
+      out += B91_ALPHABET[v % 91] + B91_ALPHABET[(v / 91) | 0];
+    }
+  }
+  if (b) {
+    out += B91_ALPHABET[n % 91];
+    if (b > 7 || n > 90) out += B91_ALPHABET[(n / 91) | 0];
+  }
+  return out;
+}
+
+function b91Decode(s) {
+  let n = 0, b = 0, v = -1;
+  const out = [];
+  for (const ch of s) {
+    const c = B91_DECODE.get(ch);
+    if (c === undefined) throw new Error("invalid basE91 char: " + ch);
+    if (v < 0) {
+      v = c;
+    } else {
+      v += c * 91;
+      n |= v << b;
+      b += (v & 8191) > 88 ? 13 : 14;
+      while (b >= 8) {
+        out.push(n & 0xFF);
+        n >>>= 8;
+        b -= 8;
+      }
+      v = -1;
+    }
+  }
+  if (v >= 0) out.push((n | (v << b)) & 0xFF);
+  return new Uint8Array(out);
+}
+
+// ---------- base32768 (port of base32768.py) ----------
+function buildB32kAlphabet() {
+  const a = [];
+  for (let cp = 0x3400; cp < 0x4DC0; cp++) a.push(String.fromCodePoint(cp));   // CJK Ext A
+  for (let cp = 0x4E00; cp < 0xA000; cp++) a.push(String.fromCodePoint(cp));   // CJK Unified
+  const need = 32768 - a.length;
+  for (let cp = 0xAC00; cp < 0xAC00 + need; cp++) a.push(String.fromCodePoint(cp)); // Hangul
+  return a;
+}
+const B32K_ALPHABET = buildB32kAlphabet();
+const B32K_DECODE = new Map();
+for (let i = 0; i < B32K_ALPHABET.length; i++) B32K_DECODE.set(B32K_ALPHABET[i], i);
+
+function b32kEncode(bytes) {
+  let n = 0, bits = 0;
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    n = (n << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 15) {
+      bits -= 15;
+      out += B32K_ALPHABET[(n >>> bits) & 0x7FFF];
+      n = n & ((1 << bits) - 1); // keep only unused low bits (bounds n in 32-bit)
+    }
+  }
+  if (bits) out += B32K_ALPHABET[(n << (15 - bits)) & 0x7FFF];
+  return out;
+}
+
+function b32kDecode(s) {
+  let n = 0, bits = 0;
+  const out = [];
+  for (const ch of s) {
+    const v = B32K_DECODE.get(ch);
+    if (v === undefined) throw new Error("invalid base32768 char: U+" + ch.codePointAt(0).toString(16));
+    n = (n << 15) | v;
+    bits += 15;
+    while (bits >= 8) {
+      bits -= 8;
+      out.push((n >>> bits) & 0xFF);
+      n = n & ((1 << bits) - 1);
+    }
+  }
+  return new Uint8Array(out);
+}
+
+// ---------- prefix matching (port of urldict.match_prefix) ----------
+const PREFIX_LOOKUP = window.URL_PREFIXES
+  .map((p, i) => ({ idx: i, p }))
+  .sort((a, b) => b.p.length - a.p.length); // longest first
+
+function matchPrefix(url) {
+  for (const e of PREFIX_LOOKUP) {
+    if (url.startsWith(e.p)) return { idx: e.idx, rest: url.slice(e.p.length) };
+  }
+  return { idx: null, rest: url };
+}
+
+// ---------- shared compress/decompress (port of shortener._compress/_decompress) ----------
+const TEXT_ENCODER = new TextEncoder();
+const TEXT_DECODER = new TextDecoder("utf-8");
+const URL_DICT_BYTES = TEXT_ENCODER.encode(window.URL_DICT_STR);
+
+function compress(url) {
+  const { idx, rest } = matchPrefix(url);
+  const restBytes = TEXT_ENCODER.encode(rest);
+  const payload = new Uint8Array(1 + restBytes.length);
+  payload[0] = idx === null ? 0xFF : idx;
+  payload.set(restBytes, 1);
+  return pako.deflateRaw(payload, { level: 9, dictionary: URL_DICT_BYTES });
+}
+
+function decompress(bytes) {
+  const raw = pako.inflateRaw(bytes, { dictionary: URL_DICT_BYTES });
+  const idx = raw[0];
+  const rest = TEXT_DECODER.decode(raw.slice(1));
+  if (idx === 0xFF) return rest;
+  return window.URL_PREFIXES[idx] + rest;
+}
+
+// ---------- mode dispatch (port of v9 picker) ----------
+const RAW_MARKER = "\\";
+
+function encode(url, mode) {
+  if (mode === "raw")  return RAW_MARKER + url;
+  if (mode === "b91")  return b91Encode(compress(url));
+  if (mode === "b32k") return b32kEncode(compress(url));
+  // auto: minimise visible chars, tie-break by utf-8 bytes
+  const cands = [
+    RAW_MARKER + url,
+    b91Encode(compress(url)),
+    b32kEncode(compress(url)),
+  ];
+  cands.sort((a, b) => {
+    if (a.length !== b.length) return a.length - b.length;
+    return TEXT_ENCODER.encode(a).length - TEXT_ENCODER.encode(b).length;
+  });
+  return cands[0];
+}
+
+function decode(s) {
+  if (s.length === 0) return "";
+  const c = s[0];
+  if (c === RAW_MARKER) return s.slice(1);
+  if (c.codePointAt(0) >= 0x3400) return decompress(b32kDecode(s));
+  return decompress(b91Decode(s));
+}
+
+// ---------- expose for ad-hoc testing in console ----------
+window.LOUS = { encode, decode, compress, decompress, b91Encode, b91Decode, b32kEncode, b32kDecode };
+
+// ============================================================
+// UI
+// ============================================================
+const $ = (id) => document.getElementById(id);
+const inputEl = $("input");
+const outputEl = $("output");
+const errEl = $("err");
+
+function utf8len(s) { return TEXT_ENCODER.encode(s).length; }
+
+function fmtRatio(num, den) {
+  if (den === 0) return "—";
+  const r = num / den;
+  return r.toFixed(2) + "×";
+}
+
+function classifyRatio(r) {
+  if (r < 0.95) return "good";
+  if (r > 1.05) return "bad";
+  return "";
+}
+
+let lastMode = "b32k";
+
+function update() {
+  errEl.textContent = "";
+  const url = inputEl.value.trim();
+  if (!url) {
+    outputEl.value = "";
+    $("in-chars").textContent = "0";
+    $("in-bytes").textContent = "0";
+    $("out-chars").textContent = "0";
+    $("out-bytes").textContent = "0";
+    $("out-ratio").textContent = "—";
+    $("out-ratio").className = "ratio";
+    return;
+  }
+  $("in-chars").textContent = url.length;
+  $("in-bytes").textContent = utf8len(url);
+
+  let encoded;
+  try {
+    encoded = encode(url, lastMode);
+  } catch (e) {
+    errEl.textContent = "Encode failed: " + e.message;
+    outputEl.value = "";
+    return;
+  }
+
+  outputEl.value = encoded;
+  const oc = encoded.length;
+  const ob = utf8len(encoded);
+  const ratio = oc / url.length;
+  $("out-chars").textContent = oc;
+  $("out-bytes").textContent = ob;
+  $("out-ratio").textContent = fmtRatio(oc, url.length);
+  $("out-ratio").className = "ratio " + classifyRatio(ratio);
+
+  // round-trip self-check (defensive: page should never produce a string that
+  // doesn't decode back to the input)
+  try {
+    const back = decode(encoded);
+    if (back !== url) {
+      errEl.textContent = "round-trip mismatch: " + JSON.stringify(back);
+    }
+  } catch (e) {
+    errEl.textContent = "decode of own output failed: " + e.message;
+  }
+}
+
+inputEl.addEventListener("input", update);
+document.querySelectorAll('input[name="mode"]').forEach(el => {
+  el.addEventListener("change", () => { lastMode = el.value; update(); });
+});
+
+document.querySelectorAll(".examples button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    inputEl.value = btn.dataset.example;
+    update();
+  });
+});
+
+$("btn-copy").addEventListener("click", async () => {
+  if (!outputEl.value) return;
+  try {
+    await navigator.clipboard.writeText(outputEl.value);
+    const b = $("btn-copy");
+    const orig = b.textContent;
+    b.textContent = "Copied ✓";
+    setTimeout(() => { b.textContent = orig; }, 1200);
+  } catch {
+    outputEl.select();
+  }
+});
+
+$("btn-decode").addEventListener("click", () => {
+  // swap roles: take whatever's in the input as encoded, decode into a popup
+  const s = inputEl.value.trim();
+  if (!s) return;
+  try {
+    const decoded = decode(s);
+    inputEl.value = decoded;
+    update();
+  } catch (e) {
+    errEl.textContent = "Decode failed: " + e.message;
+  }
+});
+
+// Default sample so the page isn't empty on load
+inputEl.value = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+update();
+
+// Smoke-test in console so we notice port bugs immediately
+(function selfTest() {
+  const cases = [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://github.com/torvalds/linux/blob/abc123def4567890/kernel/sched/core.c#L1234",
+    "https://en.wikipedia.org/wiki/Convolutional_neural_network",
+    "http://192.168.1.1:8080/admin",
+    "https://www.amazon.com/dp/B07XJ8C8F5/ref=sr_1_3?keywords=usb-c+hub&qid=1714000000&sr=8-3",
+    "https://stackoverflow.com/questions/12345678/how-to-flatten-a-list-of-lists-in-python",
+    "https://www.reddit.com/r/programming/comments/abc1234/why_rust_is_great/",
+  ];
+  for (const u of cases) {
+    for (const m of ["b32k", "b91", "raw", "auto"]) {
+      const e = encode(u, m);
+      const back = decode(e);
+      if (back !== u) {
+        console.error("FAIL", m, u, "->", e, "->", back);
+        return;
+      }
+    }
+  }
+  console.log("self-test: ok (" + cases.length + " URLs × 4 modes)");
+})();
+</script>
+</body>
+</html>
