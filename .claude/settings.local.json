@@ -10,7 +10,12 @@
       "Bash(git commit -q -m 'v2: plain base64 \\(anchor — confirms ~1.35x expansion\\) *)",
       "Bash(git commit -q -m 'v3: deflate + base64url *)",
       "Bash(git commit -q -m 'v4: pre-shared deflate dictionary -> 0.86x avg, 825/1000 wins *)",
-      "Bash(git commit -q -m 'v5: prefix table \\(1 byte\\) + dict-deflate -> 0.78x *)"
+      "Bash(git commit -q -m 'v5: prefix table \\(1 byte\\) + dict-deflate -> 0.78x *)",
+      "Bash(python3 -m pip install --quiet brotli)",
+      "Bash(python3 -c \"import brotli; print\\('brotli ok'\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m pip install --quiet brotlicffi)",
+      "Bash(git commit -q -m 'v6: prefix + brotli \\(control\\) -- 0.84x, loses to v5 *)"
     ]
   }
 }

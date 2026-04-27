@@ -7,6 +7,8 @@ encode/decode must round-trip exactly on the corpus.
 import base64
 import zlib
 
+import brotli
+
 from urldict import DICT as URL_DICT, PREFIXES, match_prefix
 
 
@@ -103,5 +105,35 @@ class V5PrefixDictDeflateB64:
         return PREFIXES[idx] + rest
 
 
+class V6PrefixBrotliB64:
+    """Prefix table + brotli (with its 120KB built-in static dict).
+
+    Verdict on this corpus: brotli LOSES to v5 (0.84 vs 0.78). Brotli's
+    static dict is HTML-flavored (tag names, English words); our 1KB
+    URL-flavored dict beats it for URL-shaped input. lgwin=16 is the
+    sweet spot for ~75-byte inputs (small window, less overhead).
+    Kept as a control to show 'bigger generic dict' isn't automatically
+    better than 'small specific dict'.
+    """
+    name = "v6-prefix+brotli"
+
+    def encode(self, url: str) -> str:
+        idx, rest = match_prefix(url)
+        if idx is None:
+            payload = b"\xff" + url.encode("utf-8")
+        else:
+            payload = bytes([idx]) + rest.encode("utf-8")
+        data = brotli.compress(payload, quality=11, mode=brotli.MODE_TEXT, lgwin=16)
+        return _b64u_encode(data)
+
+    def decode(self, payload: str) -> str:
+        raw = brotli.decompress(_b64u_decode(payload))
+        idx = raw[0]
+        rest = raw[1:].decode("utf-8")
+        if idx == 0xFF:
+            return rest
+        return PREFIXES[idx] + rest
+
+
 VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64(),
-            V5PrefixDictDeflateB64()]
+            V5PrefixDictDeflateB64(), V6PrefixBrotliB64()]
