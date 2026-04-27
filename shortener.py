@@ -197,6 +197,86 @@ class V8PrefixDictDeflateB32k:
         return PREFIXES[idx] + rest
 
 
+def _compress(url):
+    """Shared front-end: prefix-token + dict-deflate. Returns raw bytes."""
+    idx, rest = match_prefix(url)
+    if idx is None:
+        payload = b"\xff" + url.encode("utf-8")
+    else:
+        payload = bytes([idx]) + rest.encode("utf-8")
+    c = zlib.compressobj(level=9, wbits=-15, zdict=URL_DICT)
+    return c.compress(payload) + c.flush()
+
+
+def _decompress(raw):
+    d = zlib.decompressobj(wbits=-15, zdict=URL_DICT)
+    out = d.decompress(raw) + d.flush()
+    idx = out[0]
+    rest = out[1:].decode("utf-8")
+    if idx == 0xFF:
+        return rest
+    return PREFIXES[idx] + rest
+
+
+# Mode dispatch by FIRST char:
+#   '\\'  -> raw (backslash isn't in basE91 or b32k alphabets, and no real URL
+#                 starts with one; URL-safe in fragments).
+#   ASCII printable in basE91 alphabet  -> b91 mode (whole string is basE91)
+#   CJK/Hangul (>= U+3400)              -> b32k mode (whole string is base32768)
+_RAW_MARKER = "\\"
+assert _RAW_MARKER not in b91.ALPHABET
+assert _RAW_MARKER not in b32k.ALPHABET
+
+
+class _PickBest:
+    """Per-URL: try 3 candidates, pick the smallest by a chosen metric.
+
+    Candidates:
+      - RAW : '\\' + url               (best for incompressible inputs)
+      - B91 : dict-deflate + basE91    (compact ASCII / wire bytes)
+      - B32K: dict-deflate + base32768 (compact visible chars)
+
+    The two subclasses differ only in which metric they minimise.
+    """
+
+    def _candidates(self, url):
+        raw = _RAW_MARKER + url
+        comp = _compress(url)
+        return raw, b91.encode(comp), b32k.encode(comp)
+
+    def decode(self, payload: str) -> str:
+        c = payload[0]
+        if c == _RAW_MARKER:
+            return payload[1:]
+        if ord(c) >= 0x3400:
+            return _decompress(b32k.decode(payload))
+        return _decompress(b91.decode(payload))
+
+
+class V9PickChars(_PickBest):
+    """Minimise visible chars. On this corpus this always picks B32K
+    (because Unicode density beats every alternative), so the result
+    matches v8 numerically -- the picker's contribution is invisible
+    on this metric. Kept to make the dispatch logic explicit."""
+    name = "v9a-pick(chars)"
+
+    def encode(self, url: str) -> str:
+        return min(self._candidates(url),
+                   key=lambda s: (len(s), len(s.encode("utf-8"))))
+
+
+class V9PickBytes(_PickBest):
+    """Minimise utf-8 bytes. Picks B91 for almost every URL, RAW for
+    a handful of incompressible ones (IPs with ports, random short
+    domains). Beats every compress-only version on the wire metric."""
+    name = "v9b-pick(bytes)"
+
+    def encode(self, url: str) -> str:
+        return min(self._candidates(url),
+                   key=lambda s: (len(s.encode("utf-8")), len(s)))
+
+
 VERSIONS = [V1Passthrough(), V2Base64(), V3DeflateB64(), V4DictDeflateB64(),
             V5PrefixDictDeflateB64(), V6PrefixBrotliB64(),
-            V7PrefixDictDeflateB91(), V8PrefixDictDeflateB32k()]
+            V7PrefixDictDeflateB91(), V8PrefixDictDeflateB32k(),
+            V9PickChars(), V9PickBytes()]

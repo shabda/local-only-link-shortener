@@ -57,15 +57,15 @@ def main():
           f"avg len {sum(len(u) for u in urls) / len(urls):.1f}, "
           f"avg utf8 {sum(utf8(u) for u in urls) / len(urls):.1f}")
     print()
-    header = f"{'version':<28}  {'chars':>7}  {'bytes':>7}  {'med':>6}  {'wins':>6}"
+    header = f"{'version':<28}  {'chars':>8}  {'bytes':>8}  {'med':>7}  {'wins':>6}"
     print(header)
     print("-" * len(header))
     for v in VERSIONS:
         r = bench_one(v, urls)
         print(f"{r['name']:<28}  "
-              f"{r['total_char_ratio']:>7.3f}  "
-              f"{r['total_byte_ratio']:>7.3f}  "
-              f"{r['char_ratio_median']:>6.3f}  "
+              f"{r['total_char_ratio']:>8.4f}  "
+              f"{r['total_byte_ratio']:>8.4f}  "
+              f"{r['char_ratio_median']:>7.4f}  "
               f"{r['wins']:>4}/{r['n']}")
     print()
     print("chars = total encoded chars / total original chars (visible length)")
