@@ -8,6 +8,7 @@ import {
   dictDeflate, dictInflate,
 } from "./codec.mjs";
 import { preprocess, postprocess } from "./preprocess.mjs";
+import { encodeGrammar, decodeGrammar, MARKER_GRAMMAR } from "./grammar.mjs";
 
 const ENC = new TextEncoder();
 const DEC = new TextDecoder("utf-8");
@@ -181,7 +182,69 @@ export const V10_bytes = {
   decode: decodeV10FreeDispatch,
 };
 
+// ---- v11: pick best of {v10 prefix-mode, grammar-mode} per URL ----
+//
+// v10 already wins on URLs whose prefix is in the static table (1-byte index
+// reconstructs ~30 bytes of URL). v11's grammar mode helps the long tail:
+// URLs to lesser-known sites, where the prefix table only catches the
+// scheme. Both modes share the same downstream pipeline (dict-deflate +
+// alphabet); the only thing that differs is what bytes go into deflate.
+//
+// Mode dispatch: the first byte of the deflate-decompressed payload tells
+// the decoder which it is.
+//   byte 0 in [0..84]  => v10 prefix mode (current)
+//   byte 0 == 0xFE      => grammar mode
+//   byte 0 == 0xFF      => no prefix, plain deflate
+function compressV11(url) {
+  // Build the v10 candidate (always available).
+  const v10Bytes = compressV10(url);
+
+  // Build the grammar candidate (may be null for unparseable URLs).
+  const grammarPayload = encodeGrammar(url);
+  if (grammarPayload === null) return v10Bytes;
+
+  const grammarBytes = new Uint8Array(dictDeflate(grammarPayload));
+
+  return grammarBytes.length < v10Bytes.length ? grammarBytes : v10Bytes;
+}
+
+function decompressV11(bytes) {
+  const raw = new Uint8Array(dictInflate(bytes));
+  if (raw[0] === MARKER_GRAMMAR) return decodeGrammar(raw);
+  // Otherwise it's v10's encoding (prefix-idx OR 0xFF).
+  const idx = raw[0];
+  const rest = postprocess(raw.slice(1));
+  return idx === 0xFF ? rest : URL_PREFIXES[idx] + rest;
+}
+
+function decodeV11FreeDispatch(s) {
+  return s.codePointAt(0) >= 0x3400
+    ? decompressV11(b32kDecode(s))
+    : decompressV11(b91Decode(s));
+}
+
+export const V11_chars = {
+  name: "v11a-pick(chars)",
+  encode: (url) => {
+    const c = compressV11(url);
+    const a = b91Encode(c), b = b32kEncode(c);
+    return a.length < b.length ? a : b;
+  },
+  decode: decodeV11FreeDispatch,
+};
+export const V11_bytes = {
+  name: "v11b-pick(bytes)",
+  encode: (url) => {
+    const c = compressV11(url);
+    const a = b91Encode(c), b = b32kEncode(c);
+    const aB = ENC.encode(a).length, bB = ENC.encode(b).length;
+    return aB <= bB ? a : b;
+  },
+  decode: decodeV11FreeDispatch,
+};
+
 export const VERSIONS = [
   V1, V2, V3, V4, V5, V6, V7, V8, V9_chars, V9_bytes,
   V10_b91, V10_b32k, V10_chars, V10_bytes,
+  V11_chars, V11_bytes,
 ];

@@ -382,11 +382,25 @@ else                                  decodeBasE91(s);</pre>
 
     <h3>What didn't work</h3>
     <p>
-      Brotli (with its 120 KB built-in static dictionary, designed for HTML)
-      <em>lost</em> to our 1.5 KB URL-tuned dictionary on URL-shaped input —
-      its dictionary is full of English words and HTML tags that don't
-      appear in URLs, and its per-stream overhead is heavier than deflate's
-      on ~75-byte inputs.
+      <strong>Brotli</strong> (with its 120 KB built-in static dictionary,
+      designed for HTML) <em>lost</em> to our 1.5 KB URL-tuned dictionary on
+      URL-shaped input — its dictionary is full of English words and HTML
+      tags that don't appear in URLs, and its per-stream overhead is heavier
+      than deflate's on ~75-byte inputs.
+    </p>
+    <p>
+      <strong>URL grammar decomposition</strong> (parse into
+      scheme · subdomain · base · TLD · path, encode each piece with its
+      own table) <em>also</em> lost — by 0.01%, basically nothing. The
+      reason: a hand-curated prefix table reduces a known
+      <code>(scheme, host)</code> pair to a 1-byte index. Grammar
+      decomposition needs ~10 bytes of structural overhead
+      (marker + scheme + subdomain + base length + TLD index + …) to
+      describe the same thing. With both modes available, grammar mode
+      only wins for the ~4% of URLs that hit only the scheme-level
+      fallback prefix — and even on those, the savings are 3-4 bytes per
+      URL. The simpler mechanism (a static table + deflate-with-dict) is
+      already doing all the work.
     </p>
 
     <h3>Benchmark on 1,000 representative URLs</h3>
@@ -406,6 +420,7 @@ else                                  decodeBasE91(s);</pre>
         <tr><td>v8</td><td>+ base32768 alphabet</td><td>0.317</td><td>0.952</td></tr>
         <tr><td>v9</td><td>+ free dispatch (no marker)</td><td>0.317</td><td>0.720</td></tr>
         <tr class="highlight"><td>v10</td><td>+ digit/hex run packing</td><td><strong>0.307</strong></td><td><strong>0.696</strong></td></tr>
+        <tr><td>v11</td><td>grammar decomp (control, ~tied)</td><td>0.307</td><td>0.696</td></tr>
       </tbody>
     </table>
 
