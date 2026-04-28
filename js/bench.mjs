@@ -7,7 +7,10 @@ import { dirname, join } from "node:path";
 import { VERSIONS } from "./versions.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CORPUS_PATH = join(HERE, "..", "corpus.txt");
+// First CLI arg overrides, default to ../corpus.txt
+const CORPUS_PATH = process.argv[2]
+  ? (process.argv[2].startsWith("/") ? process.argv[2] : join(process.cwd(), process.argv[2]))
+  : join(HERE, "..", "corpus.txt");
 
 const ENC = new TextEncoder();
 const utf8 = (s) => ENC.encode(s).length;
@@ -49,35 +52,75 @@ function benchOne(v, urls) {
   };
 }
 
-function main() {
-  const urls = loadCorpus();
+function runOne(path) {
+  const urls = readFileSync(path, "utf8")
+    .split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.length > 0);
   const avgLen = urls.reduce((a, u) => a + u.length, 0) / urls.length;
-  const avgUtf8 = urls.reduce((a, u) => a + utf8(u), 0) / urls.length;
-  console.log(`corpus: ${urls.length} urls, avg len ${avgLen.toFixed(1)}, avg utf8 ${avgUtf8.toFixed(1)}`);
-  console.log();
-  const header =
-    "version".padEnd(28) + "  " +
-    "chars".padStart(8) + "  " +
-    "bytes".padStart(8) + "  " +
-    "med".padStart(7) + "  " +
-    "wins".padStart(6);
-  console.log(header);
-  console.log("-".repeat(header.length));
-  for (const v of VERSIONS) {
-    const r = benchOne(v, urls);
-    console.log(
-      r.name.padEnd(28) + "  " +
-      r.totalCharRatio.toFixed(4).padStart(8) + "  " +
-      r.totalByteRatio.toFixed(4).padStart(8) + "  " +
-      r.medianCharRatio.toFixed(4).padStart(7) + "  " +
-      `${r.wins}/${r.n}`.padStart(6)
-    );
+  return { path, urls, avgLen };
+}
+
+function printTable(rows) {
+  // rows: [{ name, ...metricsPerCorpus }] where metricsPerCorpus is keyed by corpus path.
+  // We support 1 or 2 corpora side-by-side.
+  const corpora = Object.keys(rows[0]).filter((k) => k !== "name");
+  const colsPerCorpus = ["chars", "bytes", "med", "wins"];
+  const labels = corpora.map((c) => c.split("/").pop());
+
+  // header
+  let header = "version".padEnd(28);
+  for (const lab of labels) {
+    header += "    " + (`[${lab}]`).padStart(36);
   }
+  console.log(header);
+  let sub = "".padEnd(28);
+  for (const _ of labels) {
+    sub += "  " + "chars".padStart(8) + "  " + "bytes".padStart(8) + "  " + "med".padStart(7) + "  " + "wins".padStart(10);
+  }
+  console.log(sub);
+  console.log("-".repeat(sub.length));
+  for (const row of rows) {
+    let line = row.name.padEnd(28);
+    for (const c of corpora) {
+      const r = row[c];
+      line += "  " + r.totalCharRatio.toFixed(4).padStart(8) +
+              "  " + r.totalByteRatio.toFixed(4).padStart(8) +
+              "  " + r.medianCharRatio.toFixed(4).padStart(7) +
+              "  " + `${r.wins}/${r.n}`.padStart(10);
+    }
+    console.log(line);
+  }
+}
+
+function main() {
+  // Args: bench.mjs [corpus1] [corpus2 ...]
+  // Default: corpus.txt (synthetic) AND corpus_real.txt (if it exists), side by side.
+  let paths = process.argv.slice(2);
+  if (paths.length === 0) {
+    paths = [join(HERE, "..", "corpus.txt")];
+    const realPath = join(HERE, "..", "corpus_real.txt");
+    try { readFileSync(realPath); paths.push(realPath); } catch {}
+  } else {
+    paths = paths.map((p) => p.startsWith("/") ? p : join(process.cwd(), p));
+  }
+
+  const corpora = paths.map(runOne);
+  for (const c of corpora) {
+    console.log(`${c.path.split("/").pop()}: ${c.urls.length} urls, avg len ${c.avgLen.toFixed(1)}`);
+  }
+  console.log();
+
+  const rows = [];
+  for (const v of VERSIONS) {
+    const row = { name: v.name };
+    for (const c of corpora) row[c.path] = benchOne(v, c.urls);
+    rows.push(row);
+  }
+  printTable(rows);
   console.log();
   console.log("chars = total encoded chars / total original chars (visible length)");
   console.log("bytes = same but utf-8 bytes (wire length)");
   console.log("med   = median per-URL char ratio");
-  console.log("wins  = URLs where encoded is strictly shorter than original (in chars)");
+  console.log("wins  = URLs where encoded is strictly shorter than original");
 }
 
 main();

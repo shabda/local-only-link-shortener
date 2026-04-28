@@ -403,26 +403,71 @@ else                                  decodeBasE91(s);</pre>
       already doing all the work.
     </p>
 
-    <h3>Benchmark on 1,000 representative URLs</h3>
-    <p>Average length 75 chars. Lower ratio = shorter encoded output.</p>
+    <h3>Benchmark</h3>
+    <p>
+      Two corpora. <strong>Synthetic</strong> = 1,000 hand-templated URLs
+      generated from common shapes (YouTube/GitHub/Wikipedia/news/…) — the
+      development bench. <strong>Real</strong> = 4,313 actual URLs scraped
+      from Hacker News + Reddit (top + best + new across 30 subs) — what
+      users actually paste. Both averaged ~75 chars.
+    </p>
+    <p>
+      Lower ratio = shorter. The two columns tell different stories
+      about each trick: corpus-tuned mechanisms win big on synthetic data
+      and shrink on real, while structural ones hold up.
+    </p>
     <table class="scoreboard">
       <thead><tr>
-        <th>Version</th><th>Trick</th><th>Visible chars</th><th>UTF-8 bytes</th>
+        <th>Version</th><th>Trick</th>
+        <th>Synth chars</th><th>Real chars</th>
+        <th>Synth bytes</th><th>Real bytes</th>
       </tr></thead>
       <tbody>
-        <tr><td>v1</td><td>Passthrough</td><td>1.000</td><td>1.000</td></tr>
-        <tr><td>v2</td><td>Plain base64 (anchor)</td><td>1.351</td><td>1.351</td></tr>
-        <tr><td>v3</td><td>Deflate + base64url</td><td>1.240</td><td>1.240</td></tr>
-        <tr><td>v4</td><td>+ shared dictionary</td><td>0.861</td><td>0.861</td></tr>
-        <tr><td>v5</td><td>+ prefix table</td><td>0.781</td><td>0.781</td></tr>
-        <tr><td>v6</td><td>brotli (control, lost)</td><td>0.839</td><td>0.839</td></tr>
-        <tr><td>v7</td><td>+ basE91 alphabet</td><td>0.720</td><td>0.720</td></tr>
-        <tr><td>v8</td><td>+ base32768 alphabet</td><td>0.317</td><td>0.952</td></tr>
-        <tr><td>v9</td><td>+ free dispatch (no marker)</td><td>0.317</td><td>0.720</td></tr>
-        <tr class="highlight"><td>v10</td><td>+ digit/hex run packing</td><td><strong>0.307</strong></td><td><strong>0.696</strong></td></tr>
-        <tr><td>v11</td><td>grammar decomp (control, ~tied)</td><td>0.307</td><td>0.696</td></tr>
+        <tr><td>v1</td><td>Passthrough</td>          <td>1.000</td><td>1.000</td><td>1.000</td><td>1.000</td></tr>
+        <tr><td>v2</td><td>Plain base64 (anchor)</td><td>1.351</td><td>1.350</td><td>1.351</td><td>1.350</td></tr>
+        <tr><td>v3</td><td>Deflate + base64url</td>  <td>1.240</td><td>1.183</td><td>1.240</td><td>1.183</td></tr>
+        <tr><td>v4</td><td>+ shared dictionary</td>  <td>0.861</td><td>0.985</td><td>0.861</td><td>0.985</td></tr>
+        <tr><td>v5</td><td>+ prefix table</td>       <td>0.781</td><td>0.957</td><td>0.781</td><td>0.957</td></tr>
+        <tr><td>v6</td><td>brotli (control, lost)</td><td>0.839</td><td>0.996</td><td>0.839</td><td>0.996</td></tr>
+        <tr><td>v7</td><td>+ basE91 alphabet</td>    <td>0.720</td><td>0.882</td><td>0.720</td><td>0.882</td></tr>
+        <tr><td>v8</td><td>+ base32768 alphabet</td> <td>0.317</td><td>0.386</td><td>0.952</td><td>1.159</td></tr>
+        <tr><td>v9</td><td>+ free dispatch (no marker)</td><td>0.317</td><td>0.386</td><td>0.720</td><td>0.882</td></tr>
+        <tr class="highlight"><td>v10</td><td>+ digit/hex run packing</td><td><strong>0.307</strong></td><td><strong>0.383</strong></td><td><strong>0.696</strong></td><td><strong>0.875</strong></td></tr>
+        <tr><td>v11</td><td>grammar decomp (control, ~tied)</td><td>0.307</td><td>0.383</td><td>0.696</td><td>0.875</td></tr>
       </tbody>
     </table>
+
+    <p>
+      Two findings worth noticing in this table:
+    </p>
+    <ul>
+      <li>
+        <strong>v3 → v4 reverses sign on real data.</strong> The hand-curated
+        dictionary saves 0.38 ratio on synthetic but costs 0.20 on real:
+        the dict's prefix entries (<code>https://www.youtube.com/watch?v=</code>,
+        <code>github.com/</code>, …) match the synthetic generator's templates
+        almost perfectly, but on real Hacker News / Reddit data — heavy on
+        long-tail indie blogs, news sites, and substacks — those entries
+        rarely apply. The prefix table is in the same boat (v5 saves 0.08
+        on synthetic, 0.03 on real). <em>This is the price of any
+        knowledge-based trick.</em>
+      </li>
+      <li>
+        <strong>v8/v10 hold up.</strong> The base32768 alphabet (15
+        bits/visible-char vs base64's 6) is corpus-independent; it gives a
+        ~2.6× visible-char shortening on real URLs vs ~3.2× on synthetic.
+        The v10 preprocessor still finds digit/hex runs in real URLs and
+        packs them — a ~1% extra win, smaller than the synthetic 3% but
+        still positive on data the encoder has never seen.
+      </li>
+    </ul>
+    <p>
+      So a fairer headline number is the real one: <strong>this page
+      compresses real-world URLs to ~38% of their visible length</strong>,
+      losslessly, with no server. The bigger 31% number on synthetic data
+      is a development artefact — it tells you where the dict and prefix
+      table are tuned to live.
+    </p>
 
     <p>
       <span class="pill">stack</span>
@@ -436,7 +481,7 @@ else                                  decodeBasE91(s);</pre>
 
 <footer>
   <span class="pill">v10 / base32768</span>
-  &nbsp; round-trip verified on 1000-URL corpus
+  &nbsp; ~38% of original visible length on 4,313 real Hacker News + Reddit URLs
 </footer>
 
 </main>
