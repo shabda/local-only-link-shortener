@@ -48,9 +48,8 @@
   .stats .ratio.good { color: var(--good); }
   .stats .ratio.bad  { color: var(--bad);  }
 
-  textarea {
+  textarea, input.urlbox {
     width: 100%;
-    min-height: 80px;
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -58,11 +57,12 @@
     font-size: 14px;
     background: var(--code);
     color: var(--fg);
-    resize: vertical;
     line-height: 1.45;
   }
-  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; background: #fff; }
-  textarea[readonly] { background: var(--code); cursor: text; }
+  textarea { min-height: 80px; resize: vertical; }
+  input.urlbox { height: auto; }
+  textarea:focus, input.urlbox:focus { outline: 2px solid var(--accent); outline-offset: -1px; background: #fff; }
+  textarea[readonly], input.urlbox[readonly] { background: var(--code); cursor: text; }
 
   .modes {
     display: flex; gap: 8px; flex-wrap: wrap;
@@ -84,7 +84,7 @@
   .modes input { accent-color: var(--accent); }
 
   .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  button {
+  button, a.btn {
     font-family: var(--sans);
     font-size: 13px;
     border: 1px solid var(--line);
@@ -93,13 +93,40 @@
     border-radius: 8px;
     padding: 7px 12px;
     cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
   }
-  button:hover { background: var(--code); }
-  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  button.primary:hover { background: #5a3dd0; }
+  button:hover, a.btn:hover { background: var(--code); }
+  button.primary, a.btn.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  button.primary:hover, a.btn.primary:hover { background: #5a3dd0; }
 
   .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .examples button { font-family: var(--mono); font-size: 12px; }
+
+  /* redirect view */
+  #redirect-view {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px;
+    margin-bottom: 16px;
+  }
+  #redirect-view .pill-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  #redirect-view .destination {
+    font-family: var(--mono);
+    font-size: 15px;
+    background: var(--code);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    word-break: break-all;
+    margin: 12px 0 16px;
+  }
+  #redirect-view .destination a { color: var(--fg); text-decoration: none; }
+  #redirect-view .destination a:hover { text-decoration: underline; }
+  #redirect-view .countdown { color: var(--muted); font-size: 13px; margin-top: 10px; }
 
   /* How-it-works */
   details.how {
@@ -121,7 +148,6 @@
     content: "+";
     font-family: var(--mono);
     color: var(--muted);
-    transition: transform 0.2s;
   }
   details.how[open] > summary::after { content: "−"; }
   .how-body { padding: 0 18px 20px; }
@@ -154,11 +180,11 @@
     padding: 2px 8px;
     color: var(--muted);
   }
+  .pill.live { background: #e8f4ec; color: var(--good); }
 
   footer { margin-top: 28px; color: var(--muted); font-size: 12px; text-align: center; }
   a { color: var(--accent); }
 
-  /* error toast */
   .err {
     color: var(--bad);
     font-family: var(--mono);
@@ -166,6 +192,8 @@
     margin-top: 6px;
     min-height: 16px;
   }
+
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -179,7 +207,31 @@
   </p>
 </header>
 
-<section class="card">
+<!-- ============================================================
+     REDIRECT VIEW: shown when the page is loaded with a #hash
+     ============================================================ -->
+<section id="redirect-view" hidden>
+  <div class="pill-row">
+    <span class="pill live">short link</span>
+    <span class="pill" id="redirect-mode">—</span>
+  </div>
+  <div style="font-size:13px;color:var(--muted)">This shortened link points to:</div>
+  <div class="destination">
+    <a id="redirect-href" href="#" rel="noopener">…</a>
+  </div>
+  <div class="actions">
+    <a class="btn primary" id="redirect-go" href="#">Visit now ↗</a>
+    <button id="redirect-stay">Stay here (decode &amp; edit)</button>
+  </div>
+  <div class="countdown" id="redirect-countdown">Auto-redirecting in 4s… (move mouse or press a key to cancel)</div>
+  <div class="err" id="redirect-err"></div>
+</section>
+
+
+<!-- ============================================================
+     ENCODER VIEW: the actual shortener
+     ============================================================ -->
+<section class="card" id="encoder-view">
   <label class="row" for="input">
     <span>Original URL</span>
     <span class="stats" id="stats-in">
@@ -195,25 +247,23 @@
       Base32768 — shortest visible</label>
     <label><input type="radio" name="mode" value="b91">
       basE91 — smallest UTF-8 bytes</label>
-    <label><input type="radio" name="mode" value="raw">
-      Raw — no encoding (control)</label>
-    <label><input type="radio" name="mode" value="auto">
-      Auto — pick best per URL</label>
   </div>
 
   <label class="row" for="output">
-    <span>Encoded</span>
+    <span>Short URL <span class="pill" id="alphabet-pill">base32768</span></span>
     <span class="stats" id="stats-out">
-      <span class="n" id="out-chars">0</span> chars
+      full <span class="n" id="out-chars">0</span> chars
       (<span class="ratio" id="out-ratio">—</span>),
-      <span class="n" id="out-bytes">0</span> bytes
+      payload <span class="n" id="out-frag-chars">0</span> chars
+      (<span class="ratio" id="out-frag-ratio">—</span>)
     </span>
   </label>
-  <textarea id="output" readonly spellcheck="false"></textarea>
+  <input type="text" class="urlbox" id="output" readonly spellcheck="false">
 
   <div class="actions" style="margin-top:10px">
-    <button class="primary" id="btn-copy">Copy</button>
-    <button id="btn-decode">↓ Paste encoded above to decode</button>
+    <button class="primary" id="btn-copy">Copy short URL</button>
+    <a class="btn" id="btn-visit" target="_blank" rel="noopener">Open in new tab ↗</a>
+    <button id="btn-paste-decode">Decode pasted short URL</button>
   </div>
   <div class="err" id="err"></div>
 
@@ -229,28 +279,32 @@
 </section>
 
 
+<!-- ============================================================
+     EXPLAINER
+     ============================================================ -->
 <details class="how">
   <summary>How it works</summary>
   <div class="how-body">
 
     <p>
-      Every link this page produces is <em>fully self-contained</em>. The decoded
-      URL is reconstructed entirely from the encoded string — there's no
-      database, no lookup table on a server. Open the HTML file from disk and it
-      still works.
+      Every short link this page produces is <em>fully self-contained</em>.
+      The encoded URL goes after a <code>#</code>, and URL fragments never leave
+      the browser — even if this page were hosted on a server, the server
+      would not see the encoded data. Open the HTML file from disk and the
+      shortener still works.
     </p>
     <p>
-      The trick is to pack the original URL through a pipeline of tricks, each
-      one shaving bits from a different angle:
+      The pipeline that turns a 75-byte URL into ~20 visible characters:
     </p>
 
-    <h3>1. Domain prefix table <span class="tag">v5 — 1 byte saved per known site</span></h3>
+    <h3>1. Domain prefix table <span class="tag">v5 — replace 30 bytes with one byte</span></h3>
     <p>
       85 hand-picked URL prefixes (<code>https://www.youtube.com/watch?v=</code>,
-      <code>https://github.com/</code>, etc.) are shared by encoder and decoder.
-      The longest matching prefix becomes a 1-byte index; <code>0xFF</code> means
-      "no prefix matched, raw URL follows." Because both ends agree on the
-      table, the index alone reconstructs ~30 bytes of URL.
+      <code>https://github.com/</code>, etc.) are baked into both encoder and
+      decoder. The longest matching prefix becomes a single byte index;
+      <code>0xFF</code> means "no prefix matched, raw URL follows." Because
+      both ends already share the table, the index alone reconstructs ~30
+      bytes of URL.
     </p>
 
     <h3>2. Deflate with a pre-shared dictionary <span class="tag">v4 — biggest single lever</span></h3>
@@ -258,60 +312,63 @@
       Plain deflate doesn't help on a 75-byte URL — its LZ77 window starts
       empty, so there's nothing to back-reference. We seed the window with a
       hand-curated 1.5 KB dictionary of common URL fragments
-      (<code>?utm_source=&amp;utm_medium=</code>, <code>/wiki/</code>, common TLDs,
-      etc.). Hot strings live near the <em>end</em> of the dictionary because
-      shorter LZ77 distances encode in fewer Huffman bits.
+      (<code>?utm_source=&amp;utm_medium=</code>, <code>/wiki/</code>, common
+      TLDs, etc.). Hot strings live near the <em>end</em> of the dictionary
+      because shorter LZ77 distances encode in fewer Huffman bits.
     </p>
     <p>
       Both encoder and decoder load the same dictionary at init time, so it
       doesn't take a single byte of wire space.
     </p>
 
-    <h3>3. Denser output alphabet <span class="tag">v7 / v8 — bits per visible character</span></h3>
+    <h3>3. Denser output alphabet <span class="tag">v7 / v8</span></h3>
     <p>
-      Base64 packs 6 bits into one ASCII character. Two ways to do better:
+      Base64 packs 6 bits into one ASCII character. We do better with two
+      different alphabets, picked by what you're optimising:
     </p>
     <ul>
       <li>
-        <strong>basE91</strong>: 91 ASCII chars × variable-length packing,
-        ~6.5 bits/char. About <em>8% denser</em> than base64. Output stays
-        ASCII (lowest UTF-8 byte cost). All 91 chars are URL-fragment-safe
-        under WHATWG.
+        <strong>basE91</strong>: 91 ASCII chars, ~6.5 bits/char (variable
+        13/14-bit packing). About <em>8% denser</em> than base64. Output stays
+        ASCII (cheapest UTF-8 bytes). All 91 chars are URL-fragment-safe under
+        WHATWG.
       </li>
       <li>
         <strong>Base32768</strong>: 32,768 carefully picked BMP code points
         (CJK Unified, CJK Extension A, Hangul Syllables — all 3 UTF-8 bytes,
-        none surrogates, RTL, or formatting). Each visible character carries
-        15 bits. Visible length drops <em>~2.5×</em> vs base64.
+        no surrogates / RTL / formatting chars). Each visible character
+        carries 15 bits. Visible length drops <em>~2.5× vs base64</em>.
       </li>
     </ul>
     <p>
-      Trade-off: base32768 doubles UTF-8 bytes on the wire (each "char" is
-      3 bytes). The <em>visible</em> URL is short; the <em>transmitted</em>
-      URL is roughly the same size as the original. Pick the alphabet to
-      match what you're optimising — readability or wire bytes.
+      Trade-off: base32768 makes the URL look short, but each char is 3 UTF-8
+      bytes — wire size stays roughly equal to the original. basE91 saves
+      bytes on the wire but loses the visual compactness. Pick whichever
+      matches what you're optimising.
     </p>
 
-    <h3>4. Per-URL mode picker <span class="tag">v9 — pick whichever wins</span></h3>
+    <h3>4. Free dispatch — 0 bits of mode marker <span class="tag">v9</span></h3>
     <p>
-      For very short or random URLs (<code>http://192.168.1.1:8080/admin</code>),
-      compression has no signal to work with — deflate's overhead exceeds any
-      saving. The encoder tries all candidates, picks the smallest, and stamps
-      a 1-character mode marker so the decoder knows which dispatch to use:
+      The two alphabets occupy <em>disjoint Unicode ranges</em>: basE91
+      output is ASCII printable (<code>U+0021…U+007E</code>), base32768
+      output is CJK / Hangul (<code>≥ U+3400</code>). The decoder just
+      inspects the first character and dispatches:
     </p>
-    <ul>
-      <li><code>\</code> at position 0 → raw passthrough (rest is the URL itself)</li>
-      <li>ASCII printable at position 0 → basE91 + dict-deflate</li>
-      <li>CJK / Hangul (≥ U+3400) at position 0 → base32768 + dict-deflate</li>
-    </ul>
+<pre style="font-family:var(--mono);font-size:12.5px;background:var(--code);padding:10px;border-radius:6px;overflow-x:auto">if (firstChar.codepoint &gt;= 0x3400) decodeBase32768(s);
+else                                  decodeBasE91(s);</pre>
+    <p>
+      No marker char, no marker byte, no length prefix — the alphabet itself
+      is the signal. Earlier drafts used a <code>\</code> marker for an
+      optional "raw" mode; dropping that was free density on every link.
+    </p>
 
     <h3>What didn't work</h3>
     <p>
       Brotli (with its 120 KB built-in static dictionary, designed for HTML)
       <em>lost</em> to our 1.5 KB URL-tuned dictionary on URL-shaped input —
-      its dictionary is full of English words and HTML tags that don't appear
-      in URLs, and its per-stream overhead is heavier than deflate's on
-      ~75-byte inputs.
+      its dictionary is full of English words and HTML tags that don't
+      appear in URLs, and its per-stream overhead is heavier than deflate's
+      on ~75-byte inputs.
     </p>
 
     <h3>Benchmark on 1,000 representative URLs</h3>
@@ -329,15 +386,15 @@
         <tr><td>v6</td><td>brotli (control, lost)</td><td>0.839</td><td>0.839</td></tr>
         <tr><td>v7</td><td>+ basE91 alphabet</td><td>0.720</td><td>0.720</td></tr>
         <tr class="highlight"><td>v8</td><td>+ base32768 alphabet</td><td><strong>0.317</strong></td><td>0.952</td></tr>
-        <tr class="highlight"><td>v9</td><td>+ per-URL picker (auto)</td><td><strong>0.317</strong></td><td><strong>0.720</strong></td></tr>
+        <tr class="highlight"><td>v9</td><td>+ free dispatch (no marker)</td><td><strong>0.317</strong></td><td><strong>0.720</strong></td></tr>
       </tbody>
     </table>
 
     <p>
       <span class="pill">stack</span>
       Pure HTML + JS + <a href="https://github.com/nodeca/pako">pako</a> for
-      deflate. No build step, no server. Open the file directly from disk and
-      it works.
+      deflate. No build step, no server. The whole shortener — encoder,
+      decoder, redirect — is one file you can open from disk.
     </p>
 
   </div>
@@ -436,7 +493,7 @@ function b32kEncode(bytes) {
     while (bits >= 15) {
       bits -= 15;
       out += B32K_ALPHABET[(n >>> bits) & 0x7FFF];
-      n = n & ((1 << bits) - 1); // keep only unused low bits (bounds n in 32-bit)
+      n = n & ((1 << bits) - 1);
     }
   }
   if (bits) out += B32K_ALPHABET[(n << (15 - bits)) & 0x7FFF];
@@ -460,10 +517,10 @@ function b32kDecode(s) {
   return new Uint8Array(out);
 }
 
-// ---------- prefix matching (port of urldict.match_prefix) ----------
+// ---------- prefix matching ----------
 const PREFIX_LOOKUP = window.URL_PREFIXES
   .map((p, i) => ({ idx: i, p }))
-  .sort((a, b) => b.p.length - a.p.length); // longest first
+  .sort((a, b) => b.p.length - a.p.length);
 
 function matchPrefix(url) {
   for (const e of PREFIX_LOOKUP) {
@@ -472,7 +529,7 @@ function matchPrefix(url) {
   return { idx: null, rest: url };
 }
 
-// ---------- shared compress/decompress (port of shortener._compress/_decompress) ----------
+// ---------- shared compress/decompress ----------
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder("utf-8");
 const URL_DICT_BYTES = TEXT_ENCODER.encode(window.URL_DICT_STR);
@@ -494,102 +551,168 @@ function decompress(bytes) {
   return window.URL_PREFIXES[idx] + rest;
 }
 
-// ---------- mode dispatch (port of v9 picker) ----------
-const RAW_MARKER = "\\";
-
-function encode(url, mode) {
-  if (mode === "raw")  return RAW_MARKER + url;
-  if (mode === "b91")  return b91Encode(compress(url));
-  if (mode === "b32k") return b32kEncode(compress(url));
-  // auto: minimise visible chars, tie-break by utf-8 bytes
-  const cands = [
-    RAW_MARKER + url,
-    b91Encode(compress(url)),
-    b32kEncode(compress(url)),
-  ];
-  cands.sort((a, b) => {
-    if (a.length !== b.length) return a.length - b.length;
-    return TEXT_ENCODER.encode(a).length - TEXT_ENCODER.encode(b).length;
-  });
-  return cands[0];
+// ---------- encode / decode (no marker -- dispatch by first-char range) ----------
+function encodeFragment(url, mode) {
+  const comp = compress(url);
+  return mode === "b91" ? b91Encode(comp) : b32kEncode(comp);
 }
 
-function decode(s) {
-  if (s.length === 0) return "";
-  const c = s[0];
-  if (c === RAW_MARKER) return s.slice(1);
-  if (c.codePointAt(0) >= 0x3400) return decompress(b32kDecode(s));
-  return decompress(b91Decode(s));
+function decodeFragment(s) {
+  if (!s) return "";
+  return s.codePointAt(0) >= 0x3400
+    ? decompress(b32kDecode(s))
+    : decompress(b91Decode(s));
 }
 
-// ---------- expose for ad-hoc testing in console ----------
-window.LOUS = { encode, decode, compress, decompress, b91Encode, b91Decode, b32kEncode, b32kDecode };
+function modeOfFragment(s) {
+  if (!s) return null;
+  return s.codePointAt(0) >= 0x3400 ? "b32k" : "b91";
+}
+
+// short-URL helpers
+const BASE_URL = location.origin === "null" || location.origin === ""
+  // file:// pages have origin === "null"; preserve full path so the link still
+  // works when the user copies it into the browser bar
+  ? location.href.split("#")[0]
+  : location.origin + location.pathname;
+
+function shortUrl(fragment) {
+  return BASE_URL + "#" + fragment;
+}
+
+// console-friendly export
+window.LOUS = {
+  encodeFragment, decodeFragment, modeOfFragment, shortUrl,
+  compress, decompress, b91Encode, b91Decode, b32kEncode, b32kDecode,
+};
 
 // ============================================================
 // UI
 // ============================================================
 const $ = (id) => document.getElementById(id);
+
+function utf8len(s) { return TEXT_ENCODER.encode(s).length; }
+function fmtRatio(num, den) { return den === 0 ? "—" : (num / den).toFixed(2) + "×"; }
+function classifyRatio(r) { return r < 0.95 ? "good" : r > 1.05 ? "bad" : ""; }
+
+// ---------- redirect view (when page is loaded with #fragment) ----------
+function tryEnterRedirectView() {
+  const frag = location.hash.slice(1);
+  if (!frag) return false;
+
+  let decoded, mode;
+  try {
+    decoded = decodeFragment(decodeURIComponent(frag));
+    mode = modeOfFragment(decodeURIComponent(frag));
+  } catch (e) {
+    // not a valid encoded fragment; let the encoder view handle it
+    return false;
+  }
+
+  $("encoder-view").hidden = true;
+  $("redirect-view").hidden = false;
+
+  const link = $("redirect-href");
+  link.href = decoded;
+  link.textContent = decoded;
+  $("redirect-go").href = decoded;
+  $("redirect-mode").textContent = mode === "b32k" ? "base32768" : "basE91";
+
+  // 4-second auto-redirect, cancelable on any interaction
+  let secs = 4;
+  const cd = $("redirect-countdown");
+  const tick = () => { cd.textContent = `Auto-redirecting in ${secs}s… (move mouse or press a key to cancel)`; };
+  tick();
+  const timer = setInterval(() => {
+    secs -= 1;
+    if (secs <= 0) {
+      clearInterval(timer);
+      window.location.href = decoded;
+    } else {
+      tick();
+    }
+  }, 1000);
+
+  const cancel = () => {
+    clearInterval(timer);
+    cd.textContent = "Auto-redirect cancelled. Click Visit to continue.";
+    document.removeEventListener("mousemove", cancel);
+    document.removeEventListener("keydown", cancel);
+  };
+  document.addEventListener("mousemove", cancel, { once: true });
+  document.addEventListener("keydown", cancel, { once: true });
+
+  $("redirect-stay").addEventListener("click", () => {
+    cancel();
+    history.replaceState(null, "", BASE_URL);
+    $("redirect-view").hidden = true;
+    $("encoder-view").hidden = false;
+    $("input").value = decoded;
+    update();
+  });
+
+  return true;
+}
+
+// ---------- encoder view ----------
 const inputEl = $("input");
 const outputEl = $("output");
 const errEl = $("err");
+const visitEl = $("btn-visit");
+const alphabetPill = $("alphabet-pill");
 
-function utf8len(s) { return TEXT_ENCODER.encode(s).length; }
-
-function fmtRatio(num, den) {
-  if (den === 0) return "—";
-  const r = num / den;
-  return r.toFixed(2) + "×";
-}
-
-function classifyRatio(r) {
-  if (r < 0.95) return "good";
-  if (r > 1.05) return "bad";
-  return "";
-}
-
-let lastMode = "b32k";
+let currentMode = "b32k";
 
 function update() {
   errEl.textContent = "";
   const url = inputEl.value.trim();
   if (!url) {
     outputEl.value = "";
+    visitEl.removeAttribute("href");
+    visitEl.classList.add("disabled");
     $("in-chars").textContent = "0";
     $("in-bytes").textContent = "0";
     $("out-chars").textContent = "0";
-    $("out-bytes").textContent = "0";
+    $("out-frag-chars").textContent = "0";
     $("out-ratio").textContent = "—";
     $("out-ratio").className = "ratio";
+    $("out-frag-ratio").textContent = "—";
+    $("out-frag-ratio").className = "ratio";
     return;
   }
   $("in-chars").textContent = url.length;
   $("in-bytes").textContent = utf8len(url);
 
-  let encoded;
+  let fragment;
   try {
-    encoded = encode(url, lastMode);
+    fragment = encodeFragment(url, currentMode);
   } catch (e) {
     errEl.textContent = "Encode failed: " + e.message;
     outputEl.value = "";
     return;
   }
 
-  outputEl.value = encoded;
-  const oc = encoded.length;
-  const ob = utf8len(encoded);
-  const ratio = oc / url.length;
-  $("out-chars").textContent = oc;
-  $("out-bytes").textContent = ob;
-  $("out-ratio").textContent = fmtRatio(oc, url.length);
-  $("out-ratio").className = "ratio " + classifyRatio(ratio);
+  const full = shortUrl(fragment);
+  outputEl.value = full;
+  visitEl.href = full;
+  alphabetPill.textContent = currentMode === "b32k" ? "base32768" : "basE91";
 
-  // round-trip self-check (defensive: page should never produce a string that
-  // doesn't decode back to the input)
+  // Two ratios so the demo's localhost host overhead doesn't hide the real win:
+  //   full     -- full URL the user will copy/paste (host + #fragment)
+  //   payload  -- the encoded fragment alone (compression effectiveness)
+  $("out-chars").textContent = full.length;
+  $("out-frag-chars").textContent = fragment.length;
+  const fullRatio = full.length / url.length;
+  const fragRatio = fragment.length / url.length;
+  $("out-ratio").textContent = fmtRatio(full.length, url.length);
+  $("out-ratio").className = "ratio " + classifyRatio(fullRatio);
+  $("out-frag-ratio").textContent = fmtRatio(fragment.length, url.length);
+  $("out-frag-ratio").className = "ratio " + classifyRatio(fragRatio);
+
+  // round-trip self-check
   try {
-    const back = decode(encoded);
-    if (back !== url) {
-      errEl.textContent = "round-trip mismatch: " + JSON.stringify(back);
-    }
+    const back = decodeFragment(fragment);
+    if (back !== url) errEl.textContent = "round-trip mismatch: " + JSON.stringify(back);
   } catch (e) {
     errEl.textContent = "decode of own output failed: " + e.message;
   }
@@ -597,14 +720,11 @@ function update() {
 
 inputEl.addEventListener("input", update);
 document.querySelectorAll('input[name="mode"]').forEach(el => {
-  el.addEventListener("change", () => { lastMode = el.value; update(); });
+  el.addEventListener("change", () => { currentMode = el.value; update(); });
 });
 
 document.querySelectorAll(".examples button").forEach(btn => {
-  btn.addEventListener("click", () => {
-    inputEl.value = btn.dataset.example;
-    update();
-  });
+  btn.addEventListener("click", () => { inputEl.value = btn.dataset.example; update(); });
 });
 
 $("btn-copy").addEventListener("click", async () => {
@@ -620,12 +740,15 @@ $("btn-copy").addEventListener("click", async () => {
   }
 });
 
-$("btn-decode").addEventListener("click", () => {
-  // swap roles: take whatever's in the input as encoded, decode into a popup
+$("btn-paste-decode").addEventListener("click", () => {
+  // Accept either a full short URL with #frag or just a bare fragment
   const s = inputEl.value.trim();
   if (!s) return;
+  let frag = s;
+  const hashIdx = s.indexOf("#");
+  if (hashIdx >= 0) frag = s.slice(hashIdx + 1);
   try {
-    const decoded = decode(s);
+    const decoded = decodeFragment(decodeURIComponent(frag));
     inputEl.value = decoded;
     update();
   } catch (e) {
@@ -633,11 +756,14 @@ $("btn-decode").addEventListener("click", () => {
   }
 });
 
-// Default sample so the page isn't empty on load
-inputEl.value = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
-update();
+// ---------- boot ----------
+const inRedirectView = tryEnterRedirectView();
+if (!inRedirectView) {
+  inputEl.value = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  update();
+}
 
-// Smoke-test in console so we notice port bugs immediately
+// console smoke test
 (function selfTest() {
   const cases = [
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -649,16 +775,20 @@ update();
     "https://www.reddit.com/r/programming/comments/abc1234/why_rust_is_great/",
   ];
   for (const u of cases) {
-    for (const m of ["b32k", "b91", "raw", "auto"]) {
-      const e = encode(u, m);
-      const back = decode(e);
+    for (const m of ["b32k", "b91"]) {
+      const frag = encodeFragment(u, m);
+      const back = decodeFragment(frag);
       if (back !== u) {
-        console.error("FAIL", m, u, "->", e, "->", back);
+        console.error("FAIL", m, u, "->", frag, "->", back);
+        return;
+      }
+      if (modeOfFragment(frag) !== m) {
+        console.error("FAIL mode-detect", m, frag, modeOfFragment(frag));
         return;
       }
     }
   }
-  console.log("self-test: ok (" + cases.length + " URLs × 4 modes)");
+  console.log("self-test: ok (" + cases.length + " URLs × 2 modes)");
 })();
 </script>
 </body>

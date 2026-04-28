@@ -21,7 +21,8 @@
       "Bash(git commit -q -m 'v9: per-URL mode picker \\(chars vs bytes variants\\) *)",
       "Bash(python3 gen_web_data.py)",
       "mcp__Claude_Preview__preview_start",
-      "Bash(git commit -q -m 'Single-page web demo: JS port + '\\\\''How it works'\\\\'' explainer *)"
+      "Bash(git commit -q -m 'Single-page web demo: JS port + '\\\\''How it works'\\\\'' explainer *)",
+      "Bash(git commit -q -m 'Real URL-shortener UX: 0-bit dispatch, hash redirect, full URL output *)"
     ]
   }
 }
