@@ -347,22 +347,49 @@
       matches what you're optimising.
     </p>
 
-    <h3>4. Structural preprocessor — pack digit/hex runs <span class="tag">v10 — general-purpose</span></h3>
+    <h3>4. Structural preprocessor — pack URL-grammar patterns <span class="tag">v10 + v13</span></h3>
     <p>
-      Deflate can't compress high-entropy character runs (commit SHAs,
-      content hashes, large integer IDs), but still pays Huffman literal
-      cost per character. So before deflate sees the URL, we scan for runs
-      of pure digits (≥6 chars) or pure lowercase hex (≥8 chars, with at
-      least one a-f) and replace each with a binary token: <code>0x01 LL …</code>
-      for digits, <code>0x02 LL …</code> for hex. Markers are byte values
-      below <code>0x20</code> — never valid in URL strings, so unambiguous.
+      Deflate can't compress high-entropy character runs and still pays
+      Huffman literal cost per character. Before deflate sees the URL, we
+      scan for four URL-grammar patterns and replace each with a marker
+      byte sequence:
+    </p>
+    <ul>
+      <li>
+        <code>0x01 LL …</code> — digit run (≥ 6 chars). 19-char Twitter
+        status → 8 bytes.
+      </li>
+      <li>
+        <code>0x02 LL …</code> — lowercase hex run (≥ 8 chars, ≥ 1 a-f).
+        40-char Git SHA → 20 bytes.
+      </li>
+      <li>
+        <code>0x03 …3 bytes</code> — <code>/YYYY/MM/DD/</code> path. Year
+        (14 bits) · month (4) · day (5) packed into 3 bytes. 12-char date
+        path → 4 bytes. Used by every CMS / news platform since the early
+        2000s — fired on <strong>10% of real URLs</strong> in the corpus.
+      </li>
+      <li>
+        <code>0x04 …16 bytes</code> — RFC 4122 UUID (8-4-4-4-12 hex). 36
+        chars → 17 bytes.
+      </li>
+    </ul>
+    <p>
+      Markers are byte values below <code>0x20</code> — never valid in URL
+      strings, so unambiguous in the preprocessed stream.
     </p>
     <p>
-      A 19-character Twitter status ID packs from 19 ASCII bytes to 8;
-      a 40-char Git commit SHA packs to 20 bytes. Crucially this is
-      <em>general structural knowledge about URLs</em> — not pattern matching
-      on specific sites — so it helps any URL containing such runs whether
-      we've heard of the host or not.
+      Plus a canonicalisation step (RFC 3986 §6.2.2.2): <code>%XX</code>
+      sequences for unreserved chars (A-Z a-z 0-9 - . _ ~) are decoded to
+      their literal form. <code>%7E</code> → <code>~</code>,
+      <code>%41</code> → <code>A</code>. Required by the RFC for canonical
+      URI form — both representations route to the same resource.
+    </p>
+    <p>
+      <em>None of these come from looking at any corpus.</em> They're
+      properties of URL syntax (RFC 3986/3987/4122) and universal internet
+      conventions. They help on any URL that happens to contain them,
+      whether we've heard of the host or not.
     </p>
 
     <h3>5. Free dispatch — 0 bits of mode marker <span class="tag">v9</span></h3>
@@ -402,6 +429,19 @@ else                                  decodeBasE91(s);</pre>
       URL. The simpler mechanism (a static table + deflate-with-dict) is
       already doing all the work.
     </p>
+    <p>
+      <strong>A universal-only dictionary</strong> (v12: drop all
+      site-specific entries, keep only RFC + framework conventions like
+      <code>/api/v1/</code>, <code>?utm_source=</code>, <code>.html</code>)
+      <em>made things worse on real data, not better</em>:
+      0.383 → 0.412 chars on the real corpus. The reasoning was "the
+      site-specific entries are corpus-tuned." The data said: real
+      internet traffic actually does hit popular sites a lot — even on a
+      held-out corpus, the dict's
+      <code>github.com/</code> · <code>youtube.com/watch?v=</code> ·
+      <code>wikipedia.org/wiki/</code> entries earn their bytes. So v13
+      keeps them and just adds the new structural packers on top.
+    </p>
 
     <h3>Benchmark</h3>
     <p>
@@ -432,8 +472,10 @@ else                                  decodeBasE91(s);</pre>
         <tr><td>v7</td><td>+ basE91 alphabet</td>    <td>0.720</td><td>0.882</td><td>0.720</td><td>0.882</td></tr>
         <tr><td>v8</td><td>+ base32768 alphabet</td> <td>0.317</td><td>0.386</td><td>0.952</td><td>1.159</td></tr>
         <tr><td>v9</td><td>+ free dispatch (no marker)</td><td>0.317</td><td>0.386</td><td>0.720</td><td>0.882</td></tr>
-        <tr class="highlight"><td>v10</td><td>+ digit/hex run packing</td><td><strong>0.307</strong></td><td><strong>0.383</strong></td><td><strong>0.696</strong></td><td><strong>0.875</strong></td></tr>
+        <tr><td>v10</td><td>+ digit/hex run packing</td><td>0.307</td><td>0.383</td><td>0.696</td><td>0.875</td></tr>
         <tr><td>v11</td><td>grammar decomp (control, ~tied)</td><td>0.307</td><td>0.383</td><td>0.696</td><td>0.875</td></tr>
+        <tr><td>v12</td><td>universal-dict only (control, lost)</td><td>0.417</td><td>0.412</td><td>1.252</td><td>1.236</td></tr>
+        <tr class="highlight"><td>v13</td><td>+ date / UUID / canonicalise</td><td><strong>0.306</strong></td><td><strong>0.379</strong></td><td><strong>0.695</strong></td><td><strong>0.866</strong></td></tr>
       </tbody>
     </table>
 
@@ -480,7 +522,7 @@ else                                  decodeBasE91(s);</pre>
 </details>
 
 <footer>
-  <span class="pill">v10 / base32768</span>
+  <span class="pill">v13 / base32768</span>
   &nbsp; ~38% of original visible length on 4,313 real Hacker News + Reddit URLs
 </footer>
 
@@ -608,14 +650,24 @@ function matchPrefix(url) {
   return { idx: null, rest: url };
 }
 
-// ---------- structural preprocessor (v10) ----------
-// Detect runs of pure digits or pure (lowercase) hex inside the URL's "rest"
-// (post-prefix-match) and pack them as binary tokens before deflate sees them.
-// Markers are byte values < 0x20 -- not valid in URL strings, so unambiguous.
-//   0x01 LL <bytes>   digit run, big-endian integer of L digits
-//   0x02 LL <bytes>   lowercase-hex run, packed 4 bits/char
+// ---------- structural preprocessor (v13) ----------
+// Detects four URL-grammar patterns and packs each as a marker byte sequence
+// before deflate sees the bytes. Markers are byte values < 0x20 -- not valid
+// in URL strings, so unambiguous in the preprocessed stream.
+//
+//   0x01 LL <bytes>          digit run, big-endian integer of L digits
+//   0x02 LL <bytes>          lowercase-hex run, packed 4 bits/char
+//   0x03 <3 bytes>           /YYYY/MM/DD/ path (year 14b + month 4b + day 5b)
+//   0x04 <16 bytes>          RFC 4122 UUID (32 hex chars + 4 dashes -> 16 bytes raw)
+//
+// Plus an RFC 3986 §6.2.2.2 canonicaliser run before the structural step:
+// %XX for unreserved chars (A-Z a-z 0-9 - . _ ~) is decoded to the literal
+// char. Lossless at the URI-equivalence level (both forms route identically),
+// not byte-exact -- the demo always returns the canonical form.
 const PRE_MARKER_DIGIT = 0x01;
 const PRE_MARKER_HEX = 0x02;
+const PRE_MARKER_DATE = 0x03;
+const PRE_MARKER_UUID = 0x04;
 const PRE_DIGIT_THRESHOLD = 6;
 const PRE_HEX_THRESHOLD = 8;
 const LOG2_10_OVER_8 = Math.log2(10) / 8;
@@ -623,29 +675,95 @@ const digitByteLen = (n) => Math.ceil(n * LOG2_10_OVER_8);
 const isDigit = (c) => c >= 0x30 && c <= 0x39;
 const isHexCh = (c) => isDigit(c) || (c >= 0x61 && c <= 0x66);
 
+// RFC 3986 §6.2.2.2: %XX for unreserved chars MUST be decoded in canonical
+// URI form. Lossless at URI-equivalence level.
+const UNRESERVED_RE = /^[A-Za-z0-9\-._~]$/;
+function canonicalize(url) {
+  let out = "";
+  let i = 0;
+  while (i < url.length) {
+    if (url[i] === "%" && i + 2 < url.length) {
+      const h = url.slice(i + 1, i + 3);
+      if (/^[0-9a-fA-F]{2}$/.test(h)) {
+        const ch = String.fromCharCode(parseInt(h, 16));
+        if (UNRESERVED_RE.test(ch)) {
+          out += ch;
+          i += 3;
+          continue;
+        }
+      }
+    }
+    out += url[i];
+    i++;
+  }
+  return out;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Try /YYYY/MM/DD/ pattern at position i. 12 chars -> 4 bytes (1 marker + 3
+// packed = 23 bits: year 14, month 4, day 5).
+function tryDate(s, i) {
+  if (i + 12 > s.length) return null;
+  if (s[i] !== "/" || s[i + 5] !== "/" || s[i + 8] !== "/" || s[i + 11] !== "/") return null;
+  for (const j of [1, 2, 3, 4, 6, 7, 9, 10]) {
+    if (!isDigit(s.charCodeAt(i + j))) return null;
+  }
+  const year = +s.slice(i + 1, i + 5);
+  const month = +s.slice(i + 6, i + 8);
+  const day = +s.slice(i + 9, i + 11);
+  if (year > 9999 || month > 15 || day > 31) return null;
+  const packed = (year << 9) | (month << 5) | day;
+  return { advance: 12, out: [PRE_MARKER_DATE, (packed >> 16) & 0xFF, (packed >> 8) & 0xFF, packed & 0xFF] };
+}
+
+// Try RFC 4122 UUID at position i. 36 chars -> 17 bytes (1 marker + 16 raw).
+function tryUuid(s, i) {
+  if (i + 36 > s.length) return null;
+  const sub = s.slice(i, i + 36);
+  if (!UUID_RE.test(sub)) return null;
+  if (i > 0) {
+    const c = s.charCodeAt(i - 1);
+    if (isHexCh(c) || c === 0x2D) return null;
+  }
+  if (i + 36 < s.length) {
+    const c = s.charCodeAt(i + 36);
+    if (isHexCh(c) || c === 0x2D) return null;
+  }
+  const out = [PRE_MARKER_UUID];
+  const flat = sub.replace(/-/g, "");
+  for (let j = 0; j < 32; j += 2) out.push(parseInt(flat.slice(j, j + 2), 16));
+  return { advance: 36, out };
+}
+
 function preprocess(s) {
   const out = [];
   let i = 0;
   while (i < s.length) {
+    // 1. Try fixed-shape patterns first (UUID 36 chars, date 12 chars).
+    const u = tryUuid(s, i); if (u) { for (const b of u.out) out.push(b); i += u.advance; continue; }
+    const d = tryDate(s, i); if (d) { for (const b of d.out) out.push(b); i += d.advance; continue; }
+
     const c0 = s.charCodeAt(i);
 
+    // 2. Variable-length digit / hex runs.
     if (isDigit(c0)) {
       let j = i; while (j < s.length && isDigit(s.charCodeAt(j))) j++;
       let k = j; while (k < s.length && isHexCh(s.charCodeAt(k))) k++;
-      let hexHasLetter = false;
+      let hasLet = false;
       for (let m = i; m < k; m++) {
         const cc = s.charCodeAt(m);
-        if (cc >= 0x61 && cc <= 0x66) { hexHasLetter = true; break; }
+        if (cc >= 0x61 && cc <= 0x66) { hasLet = true; break; }
       }
       const dl = j - i, hl = k - i;
       const dSave = dl >= PRE_DIGIT_THRESHOLD && dl <= 255 ? dl - (2 + digitByteLen(dl)) : -Infinity;
-      const hSave = hexHasLetter && hl >= PRE_HEX_THRESHOLD && hl <= 255 ? hl - (2 + Math.ceil(hl/2)) : -Infinity;
+      const hSave = hasLet && hl >= PRE_HEX_THRESHOLD && hl <= 255 ? hl - (2 + Math.ceil(hl/2)) : -Infinity;
       if (dSave > 0 || hSave > 0) {
         if (hSave >= dSave) {
           out.push(PRE_MARKER_HEX, hl);
           for (let p = i; p < k; p += 2) {
             const hi = parseInt(s[p], 16);
-            const lo = (p+1 < k) ? parseInt(s[p+1], 16) : 0;
+            const lo = (p + 1 < k) ? parseInt(s[p + 1], 16) : 0;
             out.push((hi << 4) | lo);
           }
           i = k;
@@ -659,7 +777,6 @@ function preprocess(s) {
         continue;
       }
     }
-
     if (isHexCh(c0)) {
       let j = i; while (j < s.length && isHexCh(s.charCodeAt(j))) j++;
       let hasLet = false;
@@ -668,11 +785,11 @@ function preprocess(s) {
         if (cc >= 0x61 && cc <= 0x66) { hasLet = true; break; }
       }
       const hl = j - i;
-      if (hasLet && hl >= PRE_HEX_THRESHOLD && hl <= 255 && hl - (2 + Math.ceil(hl/2)) > 0) {
+      if (hasLet && hl >= PRE_HEX_THRESHOLD && hl <= 255 && hl - (2 + Math.ceil(hl / 2)) > 0) {
         out.push(PRE_MARKER_HEX, hl);
         for (let p = i; p < j; p += 2) {
           const hi = parseInt(s[p], 16);
-          const lo = (p+1 < j) ? parseInt(s[p+1], 16) : 0;
+          const lo = (p + 1 < j) ? parseInt(s[p + 1], 16) : 0;
           out.push((hi << 4) | lo);
         }
         i = j;
@@ -680,12 +797,12 @@ function preprocess(s) {
       }
     }
 
+    // 3. Plain bytes (or multi-byte UTF-8 sequence).
     if (c0 < 0x80) { out.push(c0); i++; }
     else {
       let j = i + 1;
       while (j < s.length && s.charCodeAt(j) >= 0x80) j++;
-      const enc = TEXT_ENCODER.encode(s.slice(i, j));
-      for (const b of enc) out.push(b);
+      for (const b of TEXT_ENCODER.encode(s.slice(i, j))) out.push(b);
       i = j;
     }
   }
@@ -719,6 +836,27 @@ function postprocess(bytes) {
       }
       out += s;
       i += 2 + bl;
+    } else if (m === PRE_MARKER_DATE) {
+      flush();
+      const packed = (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3];
+      const year = (packed >> 9) & 0x3FFF;
+      const month = (packed >> 5) & 0x0F;
+      const day = packed & 0x1F;
+      out += "/" + String(year).padStart(4, "0") + "/" +
+             String(month).padStart(2, "0") + "/" +
+             String(day).padStart(2, "0") + "/";
+      i += 4;
+    } else if (m === PRE_MARKER_UUID) {
+      flush();
+      let s = "";
+      for (let b = 0; b < 16; b++) {
+        const v = bytes[i + 1 + b];
+        s += (v >> 4).toString(16);
+        s += (v & 0x0F).toString(16);
+        if (b === 3 || b === 5 || b === 7 || b === 9) s += "-";
+      }
+      out += s;
+      i += 17;
     } else {
       utf8Buf.push(m);
       i++;
@@ -734,7 +872,10 @@ const TEXT_DECODER = new TextDecoder("utf-8");
 const URL_DICT_BYTES = TEXT_ENCODER.encode(window.URL_DICT_STR);
 
 function compress(url) {
-  const { idx, rest } = matchPrefix(url);
+  // RFC 3986 §6.2.2.2: canonicalise %XX-encoded unreserved chars first.
+  // Lossless at URI-equivalence level; the decoded URL is the canonical form.
+  const canon = canonicalize(url);
+  const { idx, rest } = matchPrefix(canon);
   const pp = preprocess(rest);
   const payload = new Uint8Array(1 + pp.length);
   payload[0] = idx === null ? 0xFF : idx;
@@ -908,10 +1049,10 @@ function update() {
   $("out-frag-ratio").textContent = fmtRatio(fragment.length, url.length);
   $("out-frag-ratio").className = "ratio " + classifyRatio(fragRatio);
 
-  // round-trip self-check
+  // round-trip self-check (compare canonical forms; v13 normalises per RFC)
   try {
     const back = decodeFragment(fragment);
-    if (back !== url) errEl.textContent = "round-trip mismatch: " + JSON.stringify(back);
+    if (back !== canonicalize(url)) errEl.textContent = "round-trip mismatch: " + JSON.stringify(back);
   } catch (e) {
     errEl.textContent = "decode of own output failed: " + e.message;
   }
@@ -977,7 +1118,7 @@ if (!inRedirectView) {
     for (const m of ["b32k", "b91"]) {
       const frag = encodeFragment(u, m);
       const back = decodeFragment(frag);
-      if (back !== u) {
+      if (back !== canonicalize(u)) {
         console.error("FAIL", m, u, "->", frag, "->", back);
         return;
       }

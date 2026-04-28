@@ -9,6 +9,14 @@ import {
 } from "./codec.mjs";
 import { preprocess, postprocess } from "./preprocess.mjs";
 import { encodeGrammar, decodeGrammar, MARKER_GRAMMAR } from "./grammar.mjs";
+import {
+  preprocess as preprocessV12,
+  postprocess as postprocessV12,
+  canonicalize as canonicalizeV12,
+} from "./preprocess_v12.mjs";
+import {
+  UNIVERSAL_DICT_BYTES, UNIVERSAL_PREFIXES, matchUniversalPrefix,
+} from "./dict_universal.mjs";
 
 const ENC = new TextEncoder();
 const DEC = new TextDecoder("utf-8");
@@ -243,8 +251,116 @@ export const V11_bytes = {
   decode: decodeV11FreeDispatch,
 };
 
+// ---- v12: structural / RFC-grounded only ----
+// Goals: rely on URL grammar properties (RFC 3986/3987/4122 + universal
+// internet conventions like /YYYY/MM/DD/), NOT on knowledge about which
+// specific sites are popular.
+//
+// Differences from v10:
+//   * Universal dict (~600 bytes) -- only RFC + framework-convention
+//     entries, no site-specific patterns
+//   * Universal prefix table (8 entries) -- only scheme-level openers
+//   * Adds /YYYY/MM/DD/ packing (saves 8 bytes per occurrence)
+//   * Adds RFC 4122 UUID packing (saves 19 bytes per occurrence)
+//   * Adds RFC 3986 §6.2.2.2 percent-decoding of unreserved chars
+//     (canonicalisation -- NOT byte-exact, but lossless per RFC since both
+//     forms route to the same resource)
+function compressV12(url) {
+  const canon = canonicalizeV12(url);
+  const { idx, rest } = matchUniversalPrefix(canon);
+  const pp = preprocessV12(rest);
+  const payload = new Uint8Array(1 + pp.length);
+  payload[0] = idx === null ? 0xFF : idx;
+  payload.set(pp, 1);
+  return new Uint8Array(deflateRawSync(payload, { level: 9, dictionary: UNIVERSAL_DICT_BYTES }));
+}
+
+function decompressV12(bytes) {
+  const raw = new Uint8Array(inflateRawSync(bytes, { dictionary: UNIVERSAL_DICT_BYTES }));
+  const idx = raw[0];
+  const rest = postprocessV12(raw.slice(1));
+  return idx === 0xFF ? rest : UNIVERSAL_PREFIXES[idx] + rest;
+}
+
+function decodeV12FreeDispatch(s) {
+  return s.codePointAt(0) >= 0x3400
+    ? decompressV12(b32kDecode(s))
+    : decompressV12(b91Decode(s));
+}
+
+export const V12_chars = {
+  name: "v12a-pick(chars)",
+  encode: (url) => {
+    const c = compressV12(url);
+    const a = b91Encode(c), b = b32kEncode(c);
+    return a.length < b.length ? a : b;
+  },
+  decode: decodeV12FreeDispatch,
+  canonicalize: canonicalizeV12,
+};
+export const V12_bytes = {
+  name: "v12b-pick(bytes)",
+  encode: (url) => {
+    const c = compressV12(url);
+    const a = b91Encode(c), b = b32kEncode(c);
+    const aB = ENC.encode(a).length, bB = ENC.encode(b).length;
+    return aB <= bB ? a : b;
+  },
+  decode: decodeV12FreeDispatch,
+  canonicalize: canonicalizeV12,
+};
+
+// ---- v13: v10's dict + v12's structural preprocessors layered on top ----
+// v12 showed that a universal-only dict is worse than the corpus-tuned dict
+// even on real (held-out) data, because real-internet traffic actually does
+// hit popular sites a lot. So keep v10's dict + prefix table, but also fold
+// in the additional structural packers (date, UUID, percent-decode).
+function compressV13(url) {
+  const canon = canonicalizeV12(url);
+  const { idx, rest } = matchPrefix(canon);
+  const pp = preprocessV12(rest);
+  const payload = new Uint8Array(1 + pp.length);
+  payload[0] = idx === null ? 0xFF : idx;
+  payload.set(pp, 1);
+  return new Uint8Array(dictDeflate(payload));
+}
+function decompressV13(bytes) {
+  const raw = new Uint8Array(dictInflate(bytes));
+  const idx = raw[0];
+  const rest = postprocessV12(raw.slice(1));
+  return idx === 0xFF ? rest : URL_PREFIXES[idx] + rest;
+}
+function decodeV13FreeDispatch(s) {
+  return s.codePointAt(0) >= 0x3400
+    ? decompressV13(b32kDecode(s))
+    : decompressV13(b91Decode(s));
+}
+export const V13_chars = {
+  name: "v13a-pick(chars)",
+  encode: (url) => {
+    const c = compressV13(url);
+    const a = b91Encode(c), b = b32kEncode(c);
+    return a.length < b.length ? a : b;
+  },
+  decode: decodeV13FreeDispatch,
+  canonicalize: canonicalizeV12,
+};
+export const V13_bytes = {
+  name: "v13b-pick(bytes)",
+  encode: (url) => {
+    const c = compressV13(url);
+    const a = b91Encode(c), b = b32kEncode(c);
+    const aB = ENC.encode(a).length, bB = ENC.encode(b).length;
+    return aB <= bB ? a : b;
+  },
+  decode: decodeV13FreeDispatch,
+  canonicalize: canonicalizeV12,
+};
+
 export const VERSIONS = [
   V1, V2, V3, V4, V5, V6, V7, V8, V9_chars, V9_bytes,
   V10_b91, V10_b32k, V10_chars, V10_bytes,
   V11_chars, V11_bytes,
+  V12_chars, V12_bytes,
+  V13_chars, V13_bytes,
 ];

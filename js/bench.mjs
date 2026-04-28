@@ -29,11 +29,17 @@ function median(arr) {
 function benchOne(v, urls) {
   let encChars = 0, encBytes = 0, origChars = 0, origBytes = 0, wins = 0;
   const ratios = [];
+  // Versions that canonicalise (e.g. v12: percent-decoding per RFC 3986)
+  // round-trip to canonical form, not byte-exactly to the input. The bench
+  // measures canonicalised-input vs encoded-output -- still compares against
+  // the original URL's length for a fair compression ratio.
+  const canon = v.canonicalize || ((u) => u);
   for (const u of urls) {
+    const uc = canon(u);
     const e = v.encode(u);
     const d = v.decode(e);
-    if (d !== u) {
-      throw new Error(`${v.name} round-trip failed:\n  in:  ${JSON.stringify(u)}\n  enc: ${JSON.stringify(e)}\n  out: ${JSON.stringify(d)}`);
+    if (d !== uc) {
+      throw new Error(`${v.name} round-trip failed:\n  in:    ${JSON.stringify(u)}\n  canon: ${JSON.stringify(uc)}\n  enc:   ${JSON.stringify(e)}\n  out:   ${JSON.stringify(d)}`);
     }
     ratios.push(e.length / u.length);
     encChars += e.length;
