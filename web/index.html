@@ -347,7 +347,25 @@
       matches what you're optimising.
     </p>
 
-    <h3>4. Free dispatch — 0 bits of mode marker <span class="tag">v9</span></h3>
+    <h3>4. Structural preprocessor — pack digit/hex runs <span class="tag">v10 — general-purpose</span></h3>
+    <p>
+      Deflate can't compress high-entropy character runs (commit SHAs,
+      content hashes, large integer IDs), but still pays Huffman literal
+      cost per character. So before deflate sees the URL, we scan for runs
+      of pure digits (≥6 chars) or pure lowercase hex (≥8 chars, with at
+      least one a-f) and replace each with a binary token: <code>0x01 LL …</code>
+      for digits, <code>0x02 LL …</code> for hex. Markers are byte values
+      below <code>0x20</code> — never valid in URL strings, so unambiguous.
+    </p>
+    <p>
+      A 19-character Twitter status ID packs from 19 ASCII bytes to 8;
+      a 40-char Git commit SHA packs to 20 bytes. Crucially this is
+      <em>general structural knowledge about URLs</em> — not pattern matching
+      on specific sites — so it helps any URL containing such runs whether
+      we've heard of the host or not.
+    </p>
+
+    <h3>5. Free dispatch — 0 bits of mode marker <span class="tag">v9</span></h3>
     <p>
       The two alphabets occupy <em>disjoint Unicode ranges</em>: basE91
       output is ASCII printable (<code>U+0021…U+007E</code>), base32768
@@ -385,8 +403,9 @@ else                                  decodeBasE91(s);</pre>
         <tr><td>v5</td><td>+ prefix table</td><td>0.781</td><td>0.781</td></tr>
         <tr><td>v6</td><td>brotli (control, lost)</td><td>0.839</td><td>0.839</td></tr>
         <tr><td>v7</td><td>+ basE91 alphabet</td><td>0.720</td><td>0.720</td></tr>
-        <tr class="highlight"><td>v8</td><td>+ base32768 alphabet</td><td><strong>0.317</strong></td><td>0.952</td></tr>
-        <tr class="highlight"><td>v9</td><td>+ free dispatch (no marker)</td><td><strong>0.317</strong></td><td><strong>0.720</strong></td></tr>
+        <tr><td>v8</td><td>+ base32768 alphabet</td><td>0.317</td><td>0.952</td></tr>
+        <tr><td>v9</td><td>+ free dispatch (no marker)</td><td>0.317</td><td>0.720</td></tr>
+        <tr class="highlight"><td>v10</td><td>+ digit/hex run packing</td><td><strong>0.307</strong></td><td><strong>0.696</strong></td></tr>
       </tbody>
     </table>
 
@@ -401,7 +420,7 @@ else                                  decodeBasE91(s);</pre>
 </details>
 
 <footer>
-  <span class="pill">v9 / base32768</span>
+  <span class="pill">v10 / base32768</span>
   &nbsp; round-trip verified on 1000-URL corpus
 </footer>
 
@@ -529,24 +548,144 @@ function matchPrefix(url) {
   return { idx: null, rest: url };
 }
 
-// ---------- shared compress/decompress ----------
+// ---------- structural preprocessor (v10) ----------
+// Detect runs of pure digits or pure (lowercase) hex inside the URL's "rest"
+// (post-prefix-match) and pack them as binary tokens before deflate sees them.
+// Markers are byte values < 0x20 -- not valid in URL strings, so unambiguous.
+//   0x01 LL <bytes>   digit run, big-endian integer of L digits
+//   0x02 LL <bytes>   lowercase-hex run, packed 4 bits/char
+const PRE_MARKER_DIGIT = 0x01;
+const PRE_MARKER_HEX = 0x02;
+const PRE_DIGIT_THRESHOLD = 6;
+const PRE_HEX_THRESHOLD = 8;
+const LOG2_10_OVER_8 = Math.log2(10) / 8;
+const digitByteLen = (n) => Math.ceil(n * LOG2_10_OVER_8);
+const isDigit = (c) => c >= 0x30 && c <= 0x39;
+const isHexCh = (c) => isDigit(c) || (c >= 0x61 && c <= 0x66);
+
+function preprocess(s) {
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    const c0 = s.charCodeAt(i);
+
+    if (isDigit(c0)) {
+      let j = i; while (j < s.length && isDigit(s.charCodeAt(j))) j++;
+      let k = j; while (k < s.length && isHexCh(s.charCodeAt(k))) k++;
+      let hexHasLetter = false;
+      for (let m = i; m < k; m++) {
+        const cc = s.charCodeAt(m);
+        if (cc >= 0x61 && cc <= 0x66) { hexHasLetter = true; break; }
+      }
+      const dl = j - i, hl = k - i;
+      const dSave = dl >= PRE_DIGIT_THRESHOLD && dl <= 255 ? dl - (2 + digitByteLen(dl)) : -Infinity;
+      const hSave = hexHasLetter && hl >= PRE_HEX_THRESHOLD && hl <= 255 ? hl - (2 + Math.ceil(hl/2)) : -Infinity;
+      if (dSave > 0 || hSave > 0) {
+        if (hSave >= dSave) {
+          out.push(PRE_MARKER_HEX, hl);
+          for (let p = i; p < k; p += 2) {
+            const hi = parseInt(s[p], 16);
+            const lo = (p+1 < k) ? parseInt(s[p+1], 16) : 0;
+            out.push((hi << 4) | lo);
+          }
+          i = k;
+        } else {
+          out.push(PRE_MARKER_DIGIT, dl);
+          const v = BigInt(s.slice(i, j));
+          const bl = digitByteLen(dl);
+          for (let b = bl - 1; b >= 0; b--) out.push(Number((v >> BigInt(b * 8)) & 0xFFn));
+          i = j;
+        }
+        continue;
+      }
+    }
+
+    if (isHexCh(c0)) {
+      let j = i; while (j < s.length && isHexCh(s.charCodeAt(j))) j++;
+      let hasLet = false;
+      for (let m = i; m < j; m++) {
+        const cc = s.charCodeAt(m);
+        if (cc >= 0x61 && cc <= 0x66) { hasLet = true; break; }
+      }
+      const hl = j - i;
+      if (hasLet && hl >= PRE_HEX_THRESHOLD && hl <= 255 && hl - (2 + Math.ceil(hl/2)) > 0) {
+        out.push(PRE_MARKER_HEX, hl);
+        for (let p = i; p < j; p += 2) {
+          const hi = parseInt(s[p], 16);
+          const lo = (p+1 < j) ? parseInt(s[p+1], 16) : 0;
+          out.push((hi << 4) | lo);
+        }
+        i = j;
+        continue;
+      }
+    }
+
+    if (c0 < 0x80) { out.push(c0); i++; }
+    else {
+      let j = i + 1;
+      while (j < s.length && s.charCodeAt(j) >= 0x80) j++;
+      const enc = TEXT_ENCODER.encode(s.slice(i, j));
+      for (const b of enc) out.push(b);
+      i = j;
+    }
+  }
+  return new Uint8Array(out);
+}
+
+function postprocess(bytes) {
+  let out = "";
+  let utf8Buf = [];
+  const flush = () => { if (utf8Buf.length) { out += TEXT_DECODER.decode(new Uint8Array(utf8Buf)); utf8Buf = []; } };
+  let i = 0;
+  while (i < bytes.length) {
+    const m = bytes[i];
+    if (m === PRE_MARKER_DIGIT) {
+      flush();
+      const len = bytes[i + 1];
+      const bl = digitByteLen(len);
+      let v = 0n;
+      for (let b = 0; b < bl; b++) v = (v << 8n) | BigInt(bytes[i + 2 + b]);
+      out += v.toString().padStart(len, "0");
+      i += 2 + bl;
+    } else if (m === PRE_MARKER_HEX) {
+      flush();
+      const len = bytes[i + 1];
+      const bl = Math.ceil(len / 2);
+      let s = "";
+      for (let b = 0; b < bl; b++) {
+        const v = bytes[i + 2 + b];
+        s += (v >> 4).toString(16);
+        if (s.length < len) s += (v & 0x0F).toString(16);
+      }
+      out += s;
+      i += 2 + bl;
+    } else {
+      utf8Buf.push(m);
+      i++;
+    }
+  }
+  flush();
+  return out;
+}
+
+// ---------- shared compress/decompress (v10: prefix + preprocess + dict-deflate) ----------
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder("utf-8");
 const URL_DICT_BYTES = TEXT_ENCODER.encode(window.URL_DICT_STR);
 
 function compress(url) {
   const { idx, rest } = matchPrefix(url);
-  const restBytes = TEXT_ENCODER.encode(rest);
-  const payload = new Uint8Array(1 + restBytes.length);
+  const pp = preprocess(rest);
+  const payload = new Uint8Array(1 + pp.length);
   payload[0] = idx === null ? 0xFF : idx;
-  payload.set(restBytes, 1);
+  payload.set(pp, 1);
   return pako.deflateRaw(payload, { level: 9, dictionary: URL_DICT_BYTES });
 }
 
 function decompress(bytes) {
   const raw = pako.inflateRaw(bytes, { dictionary: URL_DICT_BYTES });
   const idx = raw[0];
-  const rest = TEXT_DECODER.decode(raw.slice(1));
+  const rest = postprocess(raw.slice(1));
   if (idx === 0xFF) return rest;
   return window.URL_PREFIXES[idx] + rest;
 }

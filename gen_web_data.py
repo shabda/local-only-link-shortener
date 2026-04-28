@@ -12,14 +12,22 @@ from urldict import DICT, PREFIXES
 
 def main():
     assert all(b < 128 for b in DICT), "DICT must be ASCII for safe JS escaping"
-    out = []
-    out.append("// AUTO-GENERATED from urldict.py via gen_web_data.py. Do not edit.")
-    out.append(f"window.URL_DICT_STR = {json.dumps(DICT.decode('ascii'))};")
-    out.append(f"window.URL_PREFIXES = {json.dumps(PREFIXES, ensure_ascii=False)};")
-    out.append("")
+    dict_str = json.dumps(DICT.decode("ascii"))
+    prefixes_str = json.dumps(PREFIXES, ensure_ascii=False)
+
+    # Browser global build (loaded by web/index.html via plain <script>)
     with open("web/data.js", "w", encoding="utf-8") as f:
-        f.write("\n".join(out))
-    print(f"wrote web/data.js ({len(DICT)} dict bytes, {len(PREFIXES)} prefixes)")
+        f.write("// AUTO-GENERATED from urldict.py via gen_web_data.py. Do not edit.\n")
+        f.write(f"window.URL_DICT_STR = {dict_str};\n")
+        f.write(f"window.URL_PREFIXES = {prefixes_str};\n")
+
+    # Node ES-module build (imported by js/bench.mjs etc.)
+    with open("js/data.mjs", "w", encoding="utf-8") as f:
+        f.write("// AUTO-GENERATED from urldict.py via gen_web_data.py. Do not edit.\n")
+        f.write(f"export const URL_DICT_STR = {dict_str};\n")
+        f.write(f"export const URL_PREFIXES = {prefixes_str};\n")
+
+    print(f"wrote web/data.js + js/data.mjs ({len(DICT)} dict bytes, {len(PREFIXES)} prefixes)")
 
 
 if __name__ == "__main__":
