@@ -465,6 +465,8 @@ else                                  decodeBasE91(s);</pre>
       <tbody>
         <tr><td>v1</td><td>Passthrough</td>          <td>1.000</td><td>1.000</td><td>1.000</td><td>1.000</td></tr>
         <tr><td>v2</td><td>Plain base64 (anchor)</td><td>1.351</td><td>1.350</td><td>1.351</td><td>1.350</td></tr>
+        <tr><td>α</td><td>basE91 alphabet only (no compression)</td><td>1.236</td><td>1.236</td><td>1.236</td><td>1.236</td></tr>
+        <tr><td>α</td><td>base32768 alphabet only (no compression)</td><td><strong>0.540</strong></td><td><strong>0.540</strong></td><td>1.619</td><td>1.619</td></tr>
         <tr><td>v3</td><td>Deflate + base64url</td>  <td>1.240</td><td>1.183</td><td>1.240</td><td>1.183</td></tr>
         <tr><td>v4</td><td>+ shared dictionary</td>  <td>0.861</td><td>0.985</td><td>0.861</td><td>0.985</td></tr>
         <tr><td>v5</td><td>+ prefix table</td>       <td>0.781</td><td>0.957</td><td>0.781</td><td>0.957</td></tr>
@@ -509,6 +511,17 @@ else                                  decodeBasE91(s);</pre>
       losslessly, with no server. The bigger 31% number on synthetic data
       is a development artefact — it tells you where the dict and prefix
       table are tuned to live.
+    </p>
+    <p>
+      The two <strong>α</strong> rows in the scoreboard answer "how much
+      does each layer actually contribute?". With no compression at all,
+      just swapping ASCII for base32768 already drops visible chars to
+      <strong>0.540</strong> on real URLs — about 75% of the eventual
+      win (0.540 → 0.379) comes from the alphabet alone. The deflate +
+      dict + prefix-table stack adds another 0.15; the structural
+      preprocessor adds the last ~0.01. Conversely, on UTF-8 wire bytes
+      the alphabet by itself is a <em>villain</em> (1.619×), and the
+      compression stack is what claws those bytes back.
     </p>
 
     <p>
