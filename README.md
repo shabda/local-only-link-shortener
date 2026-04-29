@@ -68,16 +68,40 @@ unambiguous):
 | `0x03 …3 bytes` | `/YYYY/MM/DD/` path | universal CMS convention | 12-char date → 4 bytes (fires on **10%** of real URLs) |
 | `0x04 …16 bytes` | RFC 4122 UUID (8-4-4-4-12 hex) | RFC 4122 | 36 chars → 17 bytes |
 
-Plus a canonicalisation step (RFC 3986 §6.2.2.2): `%XX` sequences for
-unreserved chars (`A-Z a-z 0-9 - . _ ~`) are decoded to their literal form.
-`%7E` → `~`, `%41` → `A`. Required by the RFC for canonical URI form.
+Plus an RFC 3986 canonicalisation pass:
+
+- percent-decode unreserved chars (§6.2.2.2): `%7E` → `~`, `%41` → `A`
+- lowercase scheme (§3.1) and host (§3.2.2)
+- strip default port (`:80` for `http://`, `:443` for `https://`)
+- strip trailing `/` on host-only URLs
+- strip empty trailing `?` or `#`
+
+All are lossless at the URI-equivalence level. In practice almost none of
+these fire on real URLs (modern parsers normalise URLs everywhere they touch
+them — only ~3 of 4,313 corpus URLs are affected) but they're correct by spec.
 
 None of the structural packers come from looking at URL data. They're
 properties of URL syntax (RFC 3986 / 3987 / 4122) and universal internet
 conventions, so they help on any URL that happens to contain them — whether
 we've heard of the host or not.
 
-### 4. Free dispatch — 0 bits of mode marker
+### 4. Variable-width base32768 tail — saves wire bytes only
+
+Base32768 encodes the input as 15-bit chunks. When input bits don't divide
+evenly, the trailing 1–14 bits get padded out to a full 15 bits and the
+last char still costs 3 UTF-8 bytes (BMP).
+
+For trailing bit-counts in `1..7`, the last char instead comes from a
+254-codepoint alphabet carved out of Latin Extended A/B
+(`U+00C0..U+01BD`) — all 2-byte UTF-8, all URL-fragment-safe. Sub-ranges
+within that alphabet encode both the value AND the bit count `B`, so the
+decoder reads exactly `B` bits from the tail char with no padding waste.
+
+Saves ~1 wire byte on roughly half of URLs (those whose post-deflate
+byte count falls in the right modular class). **No effect on visible char
+count** — that's `ceil(8N/15)` regardless. Wire bytes only.
+
+### 5. Free dispatch — 0 bits of mode marker
 
 basE91 output is ASCII printable (`U+0021…U+007E`); base32768 output is
 CJK / Hangul (`≥ U+3400`). Disjoint Unicode ranges, so the decoder just
@@ -142,7 +166,8 @@ each trick do when the input matches the encoder's assumptions?", real asks
 | v10 | + digit/hex run packing | 0.307 | 0.383 | 0.696 | 0.875 |
 | v11 | grammar decomp (control, ~tied) | 0.307 | 0.383 | 0.696 | 0.875 |
 | v12 | universal-dict only (control, lost) | 0.417 | 0.412 | 1.252 | 1.236 |
-| **v13** | **+ date / UUID / canonicalise** | **0.306** | **0.379** | **0.695** | **0.866** |
+| v13 | + date / UUID / canonicalise | 0.306 | 0.379 | 0.695 | 0.866 |
+| **v14** | **+ variable-width tail / RFC-canonicalise** | **0.306** | **0.379** | **0.694** | **0.860** |
 
 Reading the table:
 
