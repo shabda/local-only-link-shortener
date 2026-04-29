@@ -89,6 +89,73 @@ export function b32kEncode(bytes) {
   return out;
 }
 
+// Variable-tail base32768. When 1..7 trailing bits remain, emit one char
+// from a 254-codepoint Latin Ext A/B alphabet (U+00C0..U+01BD) -- 2-byte
+// UTF-8 instead of 3-byte BMP. Sub-ranges encode both value AND bit
+// count B, so the decoder knows exactly how many bits to read with no
+// padding waste. Saves ~1 wire byte per applicable URL; visible char
+// count is unchanged.
+const VT_TAIL_RANGES = [
+  // [B, startCodepoint]
+  [1, 0x00C0], [2, 0x00C2], [3, 0x00C6], [4, 0x00CE],
+  [5, 0x00DE], [6, 0x00FE], [7, 0x013E],
+];
+const VT_TAIL_MIN_CP = 0x00C0;
+const VT_TAIL_MAX_CP = 0x01BD;
+
+export function b32kEncodeVT(bytes) {
+  let n = 0, bits = 0;
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    n = (n << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 15) {
+      bits -= 15;
+      out += B32K_ALPHABET[(n >>> bits) & 0x7FFF];
+      n = n & ((1 << bits) - 1);
+    }
+  }
+  if (bits > 0) {
+    if (bits <= 7) {
+      out += String.fromCodePoint(VT_TAIL_RANGES[bits - 1][1] + (n & ((1 << bits) - 1)));
+    } else {
+      out += B32K_ALPHABET[(n << (15 - bits)) & 0x7FFF];
+    }
+  }
+  return out;
+}
+
+export function b32kDecodeVT(s) {
+  let n = 0, bits = 0;
+  const out = [];
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    if (cp >= VT_TAIL_MIN_CP && cp <= VT_TAIL_MAX_CP) {
+      let B = 0, value = 0;
+      for (let i = VT_TAIL_RANGES.length - 1; i >= 0; i--) {
+        if (cp >= VT_TAIL_RANGES[i][1]) {
+          B = VT_TAIL_RANGES[i][0];
+          value = cp - VT_TAIL_RANGES[i][1];
+          break;
+        }
+      }
+      n = (n << B) | value;
+      bits += B;
+    } else {
+      const v = B32K_DECODE.get(ch);
+      if (v === undefined) throw new Error("b32k-vt: invalid char U+" + cp.toString(16));
+      n = (n << 15) | v;
+      bits += 15;
+    }
+    while (bits >= 8) {
+      bits -= 8;
+      out.push((n >>> bits) & 0xFF);
+      n = n & ((1 << bits) - 1);
+    }
+  }
+  return new Uint8Array(out);
+}
+
 export function b32kDecode(s) {
   let n = 0, bits = 0;
   const out = [];

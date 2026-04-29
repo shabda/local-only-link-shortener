@@ -194,15 +194,18 @@ shortener — encoder, decoder, redirect — is one file you can open from disk
 web/index.html       single-file demo (encoder, decoder, redirect, explainer)
 web/data.js          generated dict + prefix table (browser globals)
 
-js/codec.mjs         shared codec primitives (b91, b32k, prefix-match)
-js/preprocess.mjs    v10 preprocessor (digit + hex run packers)
-js/preprocess_v12.mjs v13 preprocessor (+ date, UUID, canonicalize)
-js/grammar.mjs       URL grammar decomposition (v11 control)
-js/dict_universal.mjs RFC-only dictionary (v12 control)
-js/data.mjs          generated dict + prefixes (Node ES-module form)
-js/versions.mjs      v1..v13 implementations
-js/bench.mjs         Node CLI bench harness (side-by-side dual corpus)
-js/fetch_corpus.mjs  scrapes corpus_real.txt from HN + Reddit
+js/codec.mjs                  shared codec primitives (b91, b32k, b32k-vt, prefix-match)
+js/preprocess.mjs             v10 preprocessor (digit + hex run packers)
+js/preprocess_v12.mjs         v13 preprocessor (+ date, UUID, canonicalize)
+js/preprocess_configurable.mjs flag-driven preprocessor used by pipeline
+js/grammar.mjs                URL grammar decomposition (v11 control)
+js/dict_universal.mjs         RFC-only dictionary (v12 control)
+js/data.mjs                   generated dict + prefixes (Node ES-module form)
+js/pipeline.mjs               compose({ flags }) -> { encode, decode, canonicalize }
+js/versions.mjs               v1..v14 (v14 uses pipeline; v1..v13 hand-coded for history)
+js/bench.mjs                  Node CLI bench harness (dual corpus, side-by-side)
+js/bench_ablation.mjs         toggle each pipeline flag, report marginal contribution
+js/fetch_corpus.mjs           scrapes corpus_real.txt from HN + Reddit
 
 corpus.txt           1,000-URL synthetic bench
 corpus_real.txt      4,313-URL real bench (HN + Reddit)
@@ -223,6 +226,9 @@ node js/bench.mjs
 
 # bench against just one
 node js/bench.mjs corpus_real.txt
+
+# ablation: how much does each pipeline flag actually contribute?
+node js/bench_ablation.mjs
 
 # refresh the real corpus (HN + Reddit, ~3 min)
 node js/fetch_corpus.mjs
