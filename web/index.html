@@ -252,9 +252,7 @@
   <label class="row" for="output">
     <span>Short URL <span class="pill" id="alphabet-pill">base32768</span></span>
     <span class="stats" id="stats-out">
-      full <span class="n" id="out-chars">0</span> chars
-      (<span class="ratio" id="out-ratio">—</span>),
-      payload <span class="n" id="out-frag-chars">0</span> chars
+      <span class="n" id="out-frag-chars">0</span> chars
       (<span class="ratio" id="out-frag-ratio">—</span>)
     </span>
   </label>
@@ -263,7 +261,6 @@
   <div class="actions" style="margin-top:10px">
     <button class="primary" id="btn-copy">Copy short URL</button>
     <a class="btn" id="btn-visit" target="_blank" rel="noopener">Open in new tab ↗</a>
-    <button id="btn-paste-decode">Decode pasted short URL</button>
   </div>
   <div class="err" id="err"></div>
 
@@ -983,10 +980,7 @@ function update() {
     visitEl.classList.add("disabled");
     $("in-chars").textContent = "0";
     $("in-bytes").textContent = "0";
-    $("out-chars").textContent = "0";
     $("out-frag-chars").textContent = "0";
-    $("out-ratio").textContent = "—";
-    $("out-ratio").className = "ratio";
     $("out-frag-ratio").textContent = "—";
     $("out-frag-ratio").className = "ratio";
     return;
@@ -1008,15 +1002,11 @@ function update() {
   visitEl.href = full;
   alphabetPill.textContent = currentMode === "b32k" ? "base32768" : "basE91";
 
-  // Two ratios so the demo's localhost host overhead doesn't hide the real win:
-  //   full     -- full URL the user will copy/paste (host + #fragment)
-  //   payload  -- the encoded fragment alone (compression effectiveness)
-  $("out-chars").textContent = full.length;
+  // Show payload (encoded fragment) length / ratio. The full-URL length is
+  // dominated by the host (which depends on where the page is served), so
+  // it's not a useful compression metric.
   $("out-frag-chars").textContent = fragment.length;
-  const fullRatio = full.length / url.length;
   const fragRatio = fragment.length / url.length;
-  $("out-ratio").textContent = fmtRatio(full.length, url.length);
-  $("out-ratio").className = "ratio " + classifyRatio(fullRatio);
   $("out-frag-ratio").textContent = fmtRatio(fragment.length, url.length);
   $("out-frag-ratio").className = "ratio " + classifyRatio(fragRatio);
 
@@ -1048,22 +1038,6 @@ $("btn-copy").addEventListener("click", async () => {
     setTimeout(() => { b.textContent = orig; }, 1200);
   } catch {
     outputEl.select();
-  }
-});
-
-$("btn-paste-decode").addEventListener("click", () => {
-  // Accept either a full short URL with #frag or just a bare fragment
-  const s = inputEl.value.trim();
-  if (!s) return;
-  let frag = s;
-  const hashIdx = s.indexOf("#");
-  if (hashIdx >= 0) frag = s.slice(hashIdx + 1);
-  try {
-    const decoded = decodeFragment(decodeURIComponent(frag));
-    inputEl.value = decoded;
-    update();
-  } catch (e) {
-    errEl.textContent = "Decode failed: " + e.message;
   }
 });
 
