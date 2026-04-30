@@ -1,59 +1,142 @@
 // Configurable URL-shortener pipeline.
 //
-// Each trick is a stage you can toggle. Same input → same output ordering;
-// you just turn off the bits you don't want and the pipeline degrades
-// gracefully. New tricks become a flag, not a fork.
+// Every version (v1..v14) is the same pipeline with different flags. Each
+// "trick" is a stage you can toggle. Adding a future trick is a flag, not
+// a fork.
 //
 //   compose({
-//     canonicalize:  true,                    // RFC 3986 §6.2.2.2
-//     prefixTable:   true,                    // 1-byte index into PREFIXES
-//     pre:           { digit, hex, date, uuid }, // structural packers
-//     dict:          true,                    // pre-shared deflate dict
-//     alphabet:      'b91' | 'b32k' | 'b32k-vt',
-//     pickBest:      null | 'chars' | 'bytes', // try b91+b32k-vt, take min
+//     canonicalize:  bool,                                       // RFC 3986 §6.2.2.2 percent-decode
+//     prefixTable:   'none' | 'corpus' | 'universal',            // 1-byte index into a prefix table
+//     pre:           { digit, hex, date, uuid },                 // structural packers
+//     compression:   'none' | 'deflate' | 'brotli',
+//     dict:          'none' | 'corpus' | 'universal',            // which deflate zdict
+//     alphabet:      'passthrough' | 'b64' | 'b64url'
+//                  | 'b91' | 'b32k' | 'b32k-vt',
+//     pickBest:      null | 'chars' | 'bytes',                   // try b91 + alphabet, take min
 //   }) -> { encode, decode, canonicalize, cfg }
 //
-// pickBest = null: encode using `alphabet` directly. Decode by `alphabet`.
-// pickBest set:    encode with both b91 and b32k-vt, return whichever wins
-//                  on the chosen metric. Decode by first-char range
-//                  (free dispatch -- b91 chars are < 0x3400, b32k-vt's
-//                  main alphabet starts at 0x3400, b32k-vt's tail
-//                  alphabet at 0x00C0..0x01BD; we treat the tail as part
-//                  of the b32k stream because it can only appear there).
+// pickBest:
+//   When null, encode using `alphabet` directly; decode using `alphabet`.
+//   When set, encode with both b91 AND `alphabet` (which must be a CJK
+//   alphabet — b32k or b32k-vt), then return whichever wins. Decode by
+//   first-char range (free dispatch: ASCII < 0x3400 → b91; CJK ≥ 0x3400
+//   → b32k variant). The b32k-vt tail alphabet (U+00C0..U+01BD) only
+//   ever appears at the END of an encoded string, never the start, so
+//   first-char dispatch is unambiguous.
 
 import {
-  matchPrefix, URL_PREFIXES,
+  matchPrefix, URL_PREFIXES, URL_DICT_BYTES,
   b91Encode, b91Decode,
   b32kEncode, b32kDecode,
   b32kEncodeVT, b32kDecodeVT,
-  dictDeflate, dictInflate,
 } from "./codec.mjs";
+import {
+  matchUniversalPrefix, UNIVERSAL_PREFIXES, UNIVERSAL_DICT_BYTES,
+} from "./dict_universal.mjs";
 import { canonicalize as canonicalizeRfc } from "./preprocess_v12.mjs";
 import { preprocess as preMaybe, postprocess as postMaybe } from "./preprocess_configurable.mjs";
+import {
+  deflateRawSync, inflateRawSync,
+  brotliCompressSync, brotliDecompressSync,
+  constants as zc,
+} from "node:zlib";
 
 const ENC = new TextEncoder();
+const DEC = new TextDecoder("utf-8");
 
 const DEFAULTS = {
   canonicalize: true,
-  prefixTable: true,
+  prefixTable: "corpus",
   pre: { digit: true, hex: true, date: true, uuid: true },
-  dict: true,
+  compression: "deflate",
+  dict: "corpus",
   alphabet: "b32k-vt",
   pickBest: null,
 };
 
+const BROTLI_OPTS = {
+  params: {
+    [zc.BROTLI_PARAM_QUALITY]: 11,
+    [zc.BROTLI_PARAM_MODE]: zc.BROTLI_MODE_TEXT,
+    [zc.BROTLI_PARAM_LGWIN]: 16,
+  },
+};
+
+// ---- alphabet plumbing ----
+
 function alphabetEncode(name, bytes) {
-  if (name === "b91") return b91Encode(bytes);
-  if (name === "b32k") return b32kEncode(bytes);
-  if (name === "b32k-vt") return b32kEncodeVT(bytes);
+  switch (name) {
+    case "passthrough": return DEC.decode(bytes);
+    case "b64":         return Buffer.from(bytes).toString("base64");
+    case "b64url":      return Buffer.from(bytes).toString("base64url");
+    case "b91":         return b91Encode(bytes);
+    case "b32k":        return b32kEncode(bytes);
+    case "b32k-vt":     return b32kEncodeVT(bytes);
+  }
   throw new Error("unknown alphabet: " + name);
 }
+
 function alphabetDecode(name, s) {
-  if (name === "b91") return b91Decode(s);
-  if (name === "b32k") return b32kDecode(s);
-  if (name === "b32k-vt") return b32kDecodeVT(s);
+  switch (name) {
+    case "passthrough": return ENC.encode(s);
+    case "b64":         return new Uint8Array(Buffer.from(s, "base64"));
+    case "b64url":      return new Uint8Array(Buffer.from(s, "base64url"));
+    case "b91":         return b91Decode(s);
+    case "b32k":        return b32kDecode(s);
+    case "b32k-vt":     return b32kDecodeVT(s);
+  }
   throw new Error("unknown alphabet: " + name);
 }
+
+// b32k zero-pads the trailing 1..7 bits, which on alpha-only (no
+// compression) decodes to one trailing 0x00 byte. URL strings never
+// contain NUL, so we strip it. Doesn't apply to b32k-vt (variable tail
+// is byte-exact) or to compressed streams (zlib has its own end marker).
+function trimTrailingNul(bytes) {
+  let end = bytes.length;
+  while (end > 0 && bytes[end - 1] === 0) end--;
+  return bytes.subarray(0, end);
+}
+
+// ---- compression plumbing ----
+
+function pickDict(dictFlag) {
+  if (dictFlag === "corpus")    return URL_DICT_BYTES;
+  if (dictFlag === "universal") return UNIVERSAL_DICT_BYTES;
+  return null;
+}
+
+function compressBytes(bytes, cfg) {
+  if (cfg.compression === "none") return bytes;
+  if (cfg.compression === "brotli") return new Uint8Array(brotliCompressSync(bytes, BROTLI_OPTS));
+  if (cfg.compression === "deflate") {
+    const dictionary = pickDict(cfg.dict);
+    return new Uint8Array(deflateRawSync(bytes, dictionary
+      ? { level: 9, dictionary }
+      : { level: 9 }));
+  }
+  throw new Error("unknown compression: " + cfg.compression);
+}
+
+function decompressBytes(bytes, cfg) {
+  if (cfg.compression === "none") return bytes;
+  if (cfg.compression === "brotli") return new Uint8Array(brotliDecompressSync(bytes));
+  if (cfg.compression === "deflate") {
+    const dictionary = pickDict(cfg.dict);
+    return new Uint8Array(inflateRawSync(bytes, dictionary ? { dictionary } : {}));
+  }
+  throw new Error("unknown compression: " + cfg.compression);
+}
+
+// ---- prefix-table plumbing ----
+
+function pickPrefix(flag) {
+  if (flag === "corpus")    return { match: matchPrefix,          list: URL_PREFIXES       };
+  if (flag === "universal") return { match: matchUniversalPrefix, list: UNIVERSAL_PREFIXES };
+  return null;
+}
+
+// ---- main entry point ----
 
 export function compose(userCfg = {}) {
   const cfg = {
@@ -63,73 +146,66 @@ export function compose(userCfg = {}) {
   };
 
   const canonicalize = cfg.canonicalize ? canonicalizeRfc : (u) => u;
+  const prefix = pickPrefix(cfg.prefixTable);
+  // Alpha-only b32k mode only -- needs NUL trim post-decode.
+  const needsNulTrim = cfg.compression === "none" && cfg.alphabet === "b32k";
 
   function urlToCompressedBytes(url) {
     const u = canonicalize(url);
-    let preBytes;
-    let prefixByte = -1;
-    if (cfg.prefixTable) {
-      const { idx, rest } = matchPrefix(u);
-      preBytes = preMaybe(rest, cfg.pre);
-      prefixByte = idx === null ? 0xFF : idx;
-    } else {
-      preBytes = preMaybe(u, cfg.pre);
-    }
-
     let payload;
-    if (prefixByte >= 0) {
-      payload = new Uint8Array(1 + preBytes.length);
-      payload[0] = prefixByte;
-      payload.set(preBytes, 1);
+    if (prefix) {
+      const { idx, rest } = prefix.match(u);
+      const pp = preMaybe(rest, cfg.pre);
+      payload = new Uint8Array(1 + pp.length);
+      payload[0] = idx === null ? 0xFF : idx;
+      payload.set(pp, 1);
     } else {
-      payload = preBytes;
+      payload = preMaybe(u, cfg.pre);
     }
-
-    return cfg.dict ? new Uint8Array(dictDeflate(payload)) : payload;
+    return compressBytes(payload, cfg);
   }
 
-  function compressedBytesToUrl(bytes) {
-    const payload = cfg.dict ? new Uint8Array(dictInflate(bytes)) : bytes;
-    let preBytes, prefixByte = -1;
-    if (cfg.prefixTable) {
-      prefixByte = payload[0];
+  function compressedBytesToUrl(rawBytes) {
+    let payload = decompressBytes(rawBytes, cfg);
+    if (needsNulTrim) payload = trimTrailingNul(payload);
+    let preBytes, idx = -1;
+    if (prefix) {
+      idx = payload[0];
       preBytes = payload.subarray(1);
     } else {
       preBytes = payload;
     }
     const rest = postMaybe(preBytes);
-    return prefixByte < 0 || prefixByte === 0xFF
-      ? rest
-      : URL_PREFIXES[prefixByte] + rest;
+    if (!prefix) return rest;
+    return idx === 0xFF ? rest : prefix.list[idx] + rest;
   }
 
   function encode(url) {
     const bytes = urlToCompressedBytes(url);
     if (!cfg.pickBest) return alphabetEncode(cfg.alphabet, bytes);
     const a = b91Encode(bytes);
-    const b = b32kEncodeVT(bytes);
+    const b = alphabetEncode(cfg.alphabet, bytes); // must be a CJK alphabet
     if (cfg.pickBest === "bytes") {
       const aB = ENC.encode(a).length;
       const bB = ENC.encode(b).length;
-      return aB <= bB ? a : b;
+      if (aB < bB) return a;
+      if (bB < aB) return b;
+      return a.length <= b.length ? a : b;
     }
-    // chars-min: pick whichever has the smaller visible-char count.
-    // Strict < means ties go to b32k (b) -- visibly identical, but b32k
-    // has slightly different wire-byte cost so the choice is consistent.
-    return a.length < b.length ? a : b;
+    // pickBest === "chars"
+    if (b.length < a.length) return b;
+    if (a.length < b.length) return a;
+    const aB = ENC.encode(a).length;
+    const bB = ENC.encode(b).length;
+    return bB <= aB ? b : a;
   }
 
   function decode(s) {
-    let bytes;
-    if (cfg.pickBest) {
-      // Free dispatch: b91 chars are ASCII printable (< 0x3400); b32k-vt
-      // chars are CJK/Hangul (>= 0x3400) plus tail chars in 0x00C0..0x01BD.
-      // The tail chars only appear at the end, never as the first char,
-      // so the first char tells us which alphabet was used.
-      bytes = s.codePointAt(0) >= 0x3400 ? b32kDecodeVT(s) : b91Decode(s);
-    } else {
-      bytes = alphabetDecode(cfg.alphabet, s);
-    }
+    if (!cfg.pickBest) return compressedBytesToUrl(alphabetDecode(cfg.alphabet, s));
+    // Free dispatch by first-char range.
+    const bytes = s.codePointAt(0) >= 0x3400
+      ? alphabetDecode(cfg.alphabet, s)
+      : b91Decode(s);
     return compressedBytesToUrl(bytes);
   }
 
