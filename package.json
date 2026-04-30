@@ -1,0 +1,20 @@
+{
+  "name": "local-only-url-shortener",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "URL shortener that encodes the URL into the URL. No server, no database.",
+  "scripts": {
+    "build": "esbuild web/src/main.mjs --bundle --format=iife --global-name=LOUS --alias:node:zlib=./js/zlib_browser_shim.mjs --outfile=web/bundle.js --minify --target=es2020",
+    "build:dev": "esbuild web/src/main.mjs --bundle --format=iife --global-name=LOUS --alias:node:zlib=./js/zlib_browser_shim.mjs --outfile=web/bundle.js --target=es2020",
+    "bench": "node js/bench.mjs",
+    "ablation": "node js/bench_ablation.mjs",
+    "fetch-corpus": "node js/fetch_corpus.mjs"
+  },
+  "dependencies": {
+    "pako": "^2.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
