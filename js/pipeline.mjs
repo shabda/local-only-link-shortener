@@ -33,11 +33,13 @@ import {
 import {
   matchUniversalPrefix, UNIVERSAL_PREFIXES, UNIVERSAL_DICT_BYTES,
 } from "./dict_universal.mjs";
+import { ZSTD_DICT_BYTES } from "./zstd_dict.mjs";
 import { canonicalize as canonicalizeRfc } from "./preprocess_v12.mjs";
 import { preprocess as preMaybe, postprocess as postMaybe } from "./preprocess_configurable.mjs";
 import {
   deflateRawSync, inflateRawSync,
   brotliCompressSync, brotliDecompressSync,
+  zstdCompressSync, zstdDecompressSync,
   constants as zc,
 } from "node:zlib";
 
@@ -59,6 +61,21 @@ const BROTLI_OPTS = {
     [zc.BROTLI_PARAM_QUALITY]: 11,
     [zc.BROTLI_PARAM_MODE]: zc.BROTLI_MODE_TEXT,
     [zc.BROTLI_PARAM_LGWIN]: 16,
+  },
+};
+
+// zstd's frame format normally includes a 4-byte magic, optional
+// content-size, optional checksum, and optional dict-ID. For ~50-byte
+// inputs that overhead dominates the compressed size, so we strip
+// every flag we can. Magic-less mode (ZSTD_f_zstd1_magicless) isn't
+// exposed by Node's zlib API, but turning off the three optional
+// fields recovers most of the savings.
+const ZSTD_OPTS_FOR_DICT = {
+  params: {
+    [zc.ZSTD_c_compressionLevel]: 22,
+    [zc.ZSTD_c_contentSizeFlag]: 0,
+    [zc.ZSTD_c_checksumFlag]: 0,
+    [zc.ZSTD_c_dictIDFlag]: 0,
   },
 };
 
@@ -101,8 +118,9 @@ function trimTrailingNul(bytes) {
 // ---- compression plumbing ----
 
 function pickDict(dictFlag) {
-  if (dictFlag === "corpus")    return URL_DICT_BYTES;
-  if (dictFlag === "universal") return UNIVERSAL_DICT_BYTES;
+  if (dictFlag === "corpus")       return URL_DICT_BYTES;
+  if (dictFlag === "universal")    return UNIVERSAL_DICT_BYTES;
+  if (dictFlag === "zstd-trained") return ZSTD_DICT_BYTES;
   return null;
 }
 
@@ -115,6 +133,12 @@ function compressBytes(bytes, cfg) {
       ? { level: 9, dictionary }
       : { level: 9 }));
   }
+  if (cfg.compression === "zstd") {
+    const dictionary = pickDict(cfg.dict);
+    return new Uint8Array(zstdCompressSync(bytes, dictionary
+      ? { ...ZSTD_OPTS_FOR_DICT, dictionary }
+      : ZSTD_OPTS_FOR_DICT));
+  }
   throw new Error("unknown compression: " + cfg.compression);
 }
 
@@ -124,6 +148,10 @@ function decompressBytes(bytes, cfg) {
   if (cfg.compression === "deflate") {
     const dictionary = pickDict(cfg.dict);
     return new Uint8Array(inflateRawSync(bytes, dictionary ? { dictionary } : {}));
+  }
+  if (cfg.compression === "zstd") {
+    const dictionary = pickDict(cfg.dict);
+    return new Uint8Array(zstdDecompressSync(bytes, dictionary ? { dictionary } : {}));
   }
   throw new Error("unknown compression: " + cfg.compression);
 }

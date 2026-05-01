@@ -115,6 +115,35 @@ else                                decodeBasE91(s);
 No marker char, no marker byte, no length prefix. The alphabet itself is the
 signal.
 
+## v15: zstd with a trained dictionary (Node-only experiment)
+
+Trained a 16 KB zstd dictionary on 810 URLs scraped from a *separate*
+fetch (disjoint from `corpus_real.txt`) using `zstd --train`, swapped
+deflate-with-hand-curated-dict for zstd-with-trained-dict at level 22.
+
+| metric | corpus | v14 | v15 | Δ |
+|---|---|---|---|---|
+| chars | synthetic | 0.306 | 0.346 | **+13%** worse |
+| chars | real (held out) | 0.379 | 0.376 | -1% |
+| bytes | synthetic | 0.694 | 0.783 | **+13%** worse |
+| bytes | real (held out) | 0.860 | 0.854 | -1.5% |
+
+The synth loss is informative: synth was generated from templates the
+hand-curated dict was tuned for, so v14 has a corpus advantage there.
+On data the encoder has actually never seen, zstd-trained narrowly wins.
+
+**Why it's only ~1%:** zstd's frame format and entropy-table overhead
+costs ~10–15 bytes per stream — significant on ~50-byte inputs. Even
+with `contentSizeFlag/checksumFlag/dictIDFlag` all turned off, the
+overhead barely amortises. zstd shines on multi-KB inputs; for tiny
+URLs deflate's leaner framing keeps it competitive.
+
+**Why we didn't ship it to the demo:** browsers don't have native zstd
+via `DecompressionStream` yet (as of Chrome 146 / 2026). Adding a
+zstd-wasm library would more than double the bundle (~62 KB → ~140 KB)
+for a ~1% gain. v14 stays as the live encoder; v15 lives in the bench
+as a documented experiment.
+
 ## What didn't work
 
 **Brotli** (with its 120 KB built-in static dictionary, tuned for HTML) lost
@@ -167,7 +196,8 @@ each trick do when the input matches the encoder's assumptions?", real asks
 | v11 | grammar decomp (control, ~tied) | 0.307 | 0.383 | 0.696 | 0.875 |
 | v12 | universal-dict only (control, lost) | 0.417 | 0.412 | 1.252 | 1.236 |
 | v13 | + date / UUID / canonicalise | 0.306 | 0.379 | 0.695 | 0.866 |
-| **v14** | **+ variable-width tail / RFC-canonicalise** | **0.306** | **0.379** | **0.694** | **0.860** |
+| **v14** | **+ variable-width tail / RFC-canonicalise (LIVE)** | **0.306** | **0.379** | **0.694** | **0.860** |
+| v15 | + zstd-trained dict (Node-only experiment) | 0.346 | **0.376** | 0.783 | **0.854** |
 
 Reading the table:
 

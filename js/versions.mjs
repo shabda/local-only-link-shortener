@@ -208,6 +208,21 @@ const v14bCfg = { ...v13bCfg, alphabet: "b32k-vt" };
 export const V14_chars = vsn("v14a-pick(chars)", v14aCfg);
 export const V14_bytes = vsn("v14b-pick(bytes)", v14bCfg);
 
+// ============================================================
+// v15: swap deflate-with-hand-curated-dict for zstd-with-trained-
+//      dict. The 16 KB dict was trained via `zstd --train` on 810
+//      URLs disjoint from corpus_real.txt (so corpus_real numbers
+//      below are honestly held out).
+//
+//      Frame extras (content-size, checksum, dict-id) all stripped
+//      since they cost more than they save on ~50-byte inputs.
+//      Compression level 22 (max).
+// ============================================================
+const v15aCfg = { ...v14aCfg, compression: "zstd", dict: "zstd-trained" };
+const v15bCfg = { ...v14bCfg, compression: "zstd", dict: "zstd-trained" };
+export const V15_chars = vsn("v15a-zstd(chars)", v15aCfg);
+export const V15_bytes = vsn("v15b-zstd(bytes)", v15bCfg);
+
 export const VERSIONS = [
   V1, V2, V_b91, V_b32k,
   V3, V4, V5, V6, V7, V8,
@@ -217,4 +232,5 @@ export const VERSIONS = [
   V12_chars, V12_bytes,
   V13_chars, V13_bytes,
   V14_chars, V14_bytes,
+  V15_chars, V15_bytes,
 ];
