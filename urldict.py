@@ -147,6 +147,31 @@ PREFIXES = [
 
 assert len(PREFIXES) <= 254, "PREFIXES must fit in one byte with 0xFF reserved"
 
+
+# Optional per-prefix slot schemas. When a prefix has a schema, the URL is
+# expected to have exactly `len` chars from `alphabet` immediately after
+# the prefix; the encoder packs them at log2(|alphabet|) bits per char
+# (~6 here) instead of letting deflate emit each as an 8-bit literal.
+#
+# Only declare schemas for prefixes whose slots are STABLE (always the
+# same length and alphabet). YouTube/Spotify IDs qualify; Drive/Imgur
+# IDs vary in length so they're skipped.
+#
+# alphabet = "b64url" -> A-Z a-z 0-9 - _   (64 chars, 6 bits exact)
+# alphabet = "b62"    -> A-Z a-z 0-9       (62 chars, 6 bits with 2 spare codes)
+PREFIX_SCHEMAS = {
+    "https://www.youtube.com/watch?v=":   ("b64url", 11),
+    "https://www.youtube.com/shorts/":    ("b64url", 11),
+    "https://youtu.be/":                  ("b64url", 11),
+    "https://open.spotify.com/track/":    ("b62", 22),
+    "https://open.spotify.com/album/":    ("b62", 22),
+    "https://open.spotify.com/playlist/": ("b62", 22),
+    "https://open.spotify.com/artist/":   ("b62", 22),
+    "https://open.spotify.com/episode/":  ("b62", 22),
+}
+for _p in PREFIX_SCHEMAS:
+    assert _p in PREFIXES, f"schema for unknown prefix: {_p}"
+
 # Build a sorted (longest-first) list of (prefix, idx) pairs for matching.
 PREFIX_LOOKUP = sorted(enumerate(PREFIXES), key=lambda x: -len(x[1]))
 

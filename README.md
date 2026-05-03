@@ -115,6 +115,40 @@ else                                decodeBasE91(s);
 No marker char, no marker byte, no length prefix. The alphabet itself is the
 signal.
 
+## v16: per-prefix typed-slot packing (LIVE)
+
+For prefixes whose slot is fixed-shape, declare the slot's length and
+alphabet in `urldict.PREFIX_SCHEMAS` and the encoder packs the slot at
+~6 bits/char before deflate sees it.
+
+| prefix | slot |
+|---|---|
+| `https://www.youtube.com/watch?v=` | 11 chars from `[A-Za-z0-9_-]` |
+| `https://www.youtube.com/shorts/` | 11 chars from `[A-Za-z0-9_-]` |
+| `https://youtu.be/` | 11 chars from `[A-Za-z0-9_-]` |
+| `https://open.spotify.com/{track,album,playlist,artist,episode}/` | 22 chars from `[A-Za-z0-9]` |
+
+Round-trip is preserved by validating the slot against its declared
+alphabet and length: if a URL doesn't fit the schema (e.g. truncated),
+the encoder falls back to the next-longest prefix that doesn't have a
+schema.
+
+| metric | corpus | v14 | v16 | Δ |
+|---|---|---|---|---|
+| chars  | synth | 0.3064 | 0.3044 | -0.7% |
+| bytes  | synth | 0.9121 | 0.9064 | -0.6% |
+| chars  | real  | 0.3794 | 0.3791 | -0.1% |
+| bytes  | real  | 1.1326 | 1.1318 | -0.1% |
+
+Synth gains more than real because the synthetic corpus is heavy on the
+templates we have schemas for (YouTube/Spotify); real (HN/Reddit) is
+long-tail. Wins on both, ships to the browser too — bundle grew by
+~1 KB for the ~50 lines of slot codec + a couple of constants.
+
+Also gated by a `slots: true` flag in the pipeline so the older
+versions stay bit-exact (v14 is just `slots: false` with the same
+dict + prefix table).
+
 ## v15: zstd with a trained dictionary (Node-only experiment)
 
 Trained a 16 KB zstd dictionary on 810 URLs scraped from a *separate*
@@ -141,7 +175,7 @@ URLs deflate's leaner framing keeps it competitive.
 **Why we didn't ship it to the demo:** browsers don't have native zstd
 via `DecompressionStream` yet (as of Chrome 146 / 2026). Adding a
 zstd-wasm library would more than double the bundle (~62 KB → ~140 KB)
-for a ~1% gain. v14 stays as the live encoder; v15 lives in the bench
+for a ~1% gain. v16 is the live encoder; v15 lives in the bench
 as a documented experiment.
 
 ## What didn't work
@@ -196,8 +230,9 @@ each trick do when the input matches the encoder's assumptions?", real asks
 | v11 | grammar decomp (control, ~tied) | 0.307 | 0.383 | 0.696 | 0.875 |
 | v12 | universal-dict only (control, lost) | 0.417 | 0.412 | 1.252 | 1.236 |
 | v13 | + date / UUID / canonicalise | 0.306 | 0.379 | 0.695 | 0.866 |
-| **v14** | **+ variable-width tail / RFC-canonicalise (LIVE)** | **0.306** | **0.379** | **0.694** | **0.860** |
-| v15 | + zstd-trained dict (Node-only experiment) | 0.346 | **0.376** | 0.783 | **0.854** |
+| v14 | + variable-width tail / RFC-canonicalise | 0.306 | 0.379 | 0.694 | 0.860 |
+| v15 | + zstd-trained dict (Node-only experiment) | 0.346 | 0.376 | 0.783 | 0.854 |
+| **v16** | **+ per-prefix typed-slot packing (LIVE)** | **0.304** | **0.379** | **0.691** | **0.865** |
 
 Reading the table:
 
@@ -233,7 +268,7 @@ js/grammar.mjs                URL grammar decomposition (v11 control)
 js/dict_universal.mjs         RFC-only dictionary (v12 control)
 js/data.mjs                   generated dict + prefixes (Node ES-module form)
 js/pipeline.mjs               compose({ flags }) -> { encode, decode, canonicalize }
-js/versions.mjs               v1..v14 (v14 uses pipeline; v1..v13 hand-coded for history)
+js/versions.mjs               v1..v16 (live = v16; v1..v13 hand-coded for the changelog)
 js/bench.mjs                  Node CLI bench harness (dual corpus, side-by-side)
 js/bench_ablation.mjs         toggle each pipeline flag, report marginal contribution
 js/fetch_corpus.mjs           scrapes corpus_real.txt from HN + Reddit

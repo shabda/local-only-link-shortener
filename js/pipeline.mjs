@@ -25,7 +25,8 @@
 //   first-char dispatch is unambiguous.
 
 import {
-  matchPrefix, URL_PREFIXES, URL_DICT_BYTES,
+  matchPrefix, URL_PREFIXES, URL_DICT_BYTES, PREFIX_SCHEMAS,
+  unpackSlot, slotByteLen,
   b91Encode, b91Decode,
   b32kEncode, b32kDecode,
   b32kEncodeVT, b32kDecodeVT,
@@ -33,7 +34,11 @@ import {
 import {
   matchUniversalPrefix, UNIVERSAL_PREFIXES, UNIVERSAL_DICT_BYTES,
 } from "./dict_universal.mjs";
-import { ZSTD_DICT_BYTES } from "./zstd_dict.mjs";
+// `#zstd-dict` resolves to ./js/zstd_dict.mjs via package.json `imports`
+// in Node, and to ./js/zstd_dict_browser_stub.mjs via esbuild --alias in
+// the browser bundle. v15 is Node-only; the browser bundle saves 60 KB
+// by getting the empty stub. v16 (live) doesn't use zstd at all.
+import { ZSTD_DICT_BYTES } from "#zstd-dict";
 import { canonicalize as canonicalizeRfc } from "./preprocess_v12.mjs";
 import { preprocess as preMaybe, postprocess as postMaybe } from "./preprocess_configurable.mjs";
 import {
@@ -54,6 +59,11 @@ const DEFAULTS = {
   dict: "corpus",
   alphabet: "b32k-vt",
   pickBest: null,
+  // When true, the prefix matcher consults PREFIX_SCHEMAS and packs the
+  // slot following matching prefixes (e.g. 11 b64url chars after a
+  // YouTube prefix -> 9 bytes instead of 11 ASCII bytes). Off by default
+  // so v14 stays bit-exact with previously-encoded URLs.
+  slots: false,
 };
 
 const BROTLI_OPTS = {
@@ -159,8 +169,10 @@ function decompressBytes(bytes, cfg) {
 // ---- prefix-table plumbing ----
 
 function pickPrefix(flag) {
-  if (flag === "corpus")    return { match: matchPrefix,          list: URL_PREFIXES       };
-  if (flag === "universal") return { match: matchUniversalPrefix, list: UNIVERSAL_PREFIXES };
+  if (flag === "corpus")    return { match: matchPrefix,          list: URL_PREFIXES,       schemas: PREFIX_SCHEMAS };
+  // Universal prefix table doesn't define schemas (its prefixes are
+  // generic scheme-only, no fixed-shape slot to pack).
+  if (flag === "universal") return { match: matchUniversalPrefix, list: UNIVERSAL_PREFIXES, schemas: {} };
   return null;
 }
 
@@ -182,11 +194,13 @@ export function compose(userCfg = {}) {
     const u = canonicalize(url);
     let payload;
     if (prefix) {
-      const { idx, rest } = prefix.match(u);
+      const { idx, rest, slot } = prefix.match(u, cfg.slots);
       const pp = preMaybe(rest, cfg.pre);
-      payload = new Uint8Array(1 + pp.length);
+      const slotLen = slot ? slot.length : 0;
+      payload = new Uint8Array(1 + slotLen + pp.length);
       payload[0] = idx === null ? 0xFF : idx;
-      payload.set(pp, 1);
+      if (slot) payload.set(slot, 1);
+      payload.set(pp, 1 + slotLen);
     } else {
       payload = preMaybe(u, cfg.pre);
     }
@@ -196,16 +210,29 @@ export function compose(userCfg = {}) {
   function compressedBytesToUrl(rawBytes) {
     let payload = decompressBytes(rawBytes, cfg);
     if (needsNulTrim) payload = trimTrailingNul(payload);
-    let preBytes, idx = -1;
+    let preBytes, idx = -1, slotChars = "";
     if (prefix) {
       idx = payload[0];
-      preBytes = payload.subarray(1);
+      let off = 1;
+      // Slot mode: if the matched prefix has a schema, consume the
+      // packed-slot bytes that follow the index byte and unpack them
+      // back to characters. The unpacked chars are inserted between
+      // the prefix and the postprocessed remainder.
+      if (cfg.slots && idx !== 0xFF) {
+        const schema = prefix.schemas[prefix.list[idx]];
+        if (schema) {
+          const sbl = slotByteLen(schema.len);
+          slotChars = unpackSlot(payload.subarray(1, 1 + sbl), schema.alphabet, schema.len);
+          off = 1 + sbl;
+        }
+      }
+      preBytes = payload.subarray(off);
     } else {
       preBytes = payload;
     }
     const rest = postMaybe(preBytes);
     if (!prefix) return rest;
-    return idx === 0xFF ? rest : prefix.list[idx] + rest;
+    return idx === 0xFF ? rest : prefix.list[idx] + slotChars + rest;
   }
 
   function encode(url) {

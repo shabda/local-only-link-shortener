@@ -25,6 +25,17 @@ export function brotliDecompressSync() {
   throw new Error("brotli not available in browser bundle (node-only)");
 }
 
+// zstd: same story. v15 (zstd-trained dict) is a Node-only experiment;
+// the live browser pipeline (v16) uses deflate, never zstd. Provide
+// stubs so the import resolves.
+export function zstdCompressSync() {
+  throw new Error("zstd not available in browser bundle (node-only)");
+}
+
+export function zstdDecompressSync() {
+  throw new Error("zstd not available in browser bundle (node-only)");
+}
+
 // pipeline.mjs imports `constants as zc` and reads BROTLI_PARAM_*. These
 // are only accessed at module-load time (in BROTLI_OPTS), so they need
 // to evaluate to *something* without throwing. The actual brotli call
@@ -34,4 +45,9 @@ export const constants = {
   BROTLI_PARAM_MODE: 0,
   BROTLI_PARAM_LGWIN: 0,
   BROTLI_MODE_TEXT: 0,
+  // zstd flags accessed at module-load time in BROTLI_OPTS-style objects.
+  ZSTD_c_compressionLevel: 0,
+  ZSTD_c_contentSizeFlag: 0,
+  ZSTD_c_checksumFlag: 0,
+  ZSTD_c_dictIDFlag: 0,
 };

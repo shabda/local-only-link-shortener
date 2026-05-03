@@ -1,7 +1,7 @@
 // Browser entry point. esbuild bundles this into web/bundle.js (IIFE,
 // global name `LOUS`). One source of truth for the codec -- imports the
-// same modules the Node bench uses, so v14 in the browser is bit-exact
-// with v14 in Node.
+// same modules the Node bench uses, so v16 in the browser is bit-exact
+// with v16 in Node.
 //
 // Imports of `node:zlib` are rewritten by the build (--alias) to a
 // pako-backed shim. Everything else (alphabets, prefix table, dict,
@@ -10,13 +10,17 @@
 import { compose } from "../../js/pipeline.mjs";
 import { canonicalize as canonicalizeImpl } from "../../js/preprocess_v12.mjs";
 
-// v14 LIVE config -- two pipelines, one per user-selectable mode.
+// v16 LIVE config -- two pipelines, one per user-selectable mode.
+// `slots: true` enables per-prefix typed-slot packing for templates
+// like youtube.com/watch?v=<11 b64url chars>: pack the slot at ~6
+// bits/char before deflate sees it.
 const baseCfg = {
   canonicalize: true,
   prefixTable: "corpus",
   pre: { digit: true, hex: true, date: true, uuid: true },
   compression: "deflate",
   dict: "corpus",
+  slots: true,
 };
 const pipeB91  = compose({ ...baseCfg, alphabet: "b91"     });
 const pipeB32k = compose({ ...baseCfg, alphabet: "b32k-vt" });

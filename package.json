@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "description": "URL shortener that encodes the URL into the URL. No server, no database.",
+  "imports": {
+    "#zstd-dict": "./js/zstd_dict.mjs"
+  },
   "scripts": {
-    "build": "esbuild web/src/main.mjs --bundle --format=iife --global-name=LOUS --alias:node:zlib=./js/zlib_browser_shim.mjs --outfile=web/bundle.js --minify --target=es2020",
-    "build:dev": "esbuild web/src/main.mjs --bundle --format=iife --global-name=LOUS --alias:node:zlib=./js/zlib_browser_shim.mjs --outfile=web/bundle.js --target=es2020",
+    "build": "esbuild web/src/main.mjs --bundle --format=iife --global-name=LOUS --alias:node:zlib=./js/zlib_browser_shim.mjs --alias:#zstd-dict=./js/zstd_dict_browser_stub.mjs --outfile=web/bundle.js --minify --target=es2020",
+    "build:dev": "esbuild web/src/main.mjs --bundle --format=iife --global-name=LOUS --alias:node:zlib=./js/zlib_browser_shim.mjs --alias:#zstd-dict=./js/zstd_dict_browser_stub.mjs --outfile=web/bundle.js --target=es2020",
     "bench": "node js/bench.mjs",
     "ablation": "node js/bench_ablation.mjs",
     "fetch-corpus": "node js/fetch_corpus.mjs"

@@ -223,6 +223,23 @@ const v15bCfg = { ...v14bCfg, compression: "zstd", dict: "zstd-trained" };
 export const V15_chars = vsn("v15a-zstd(chars)", v15aCfg);
 export const V15_bytes = vsn("v15b-zstd(bytes)", v15bCfg);
 
+// ============================================================
+// v16: + per-prefix typed-slot packing.  For prefixes with stable
+//      fixed-length, fixed-alphabet slots (YouTube IDs: 11 b64url;
+//      Spotify IDs: 22 b62), pack the slot at ~6 bits/char before
+//      deflate sees it. Saves 2 bytes per YouTube URL, 5 per Spotify
+//      URL, etc., pre-alphabet.
+//
+//      Schemas live in urldict.PREFIX_SCHEMAS and ride along in the
+//      generated js/data.mjs. Slot mode is gated by a `slots: true`
+//      flag so v14 stays bit-exact (previously-encoded URLs continue
+//      to round-trip).
+// ============================================================
+const v16aCfg = { ...v14aCfg, slots: true };
+const v16bCfg = { ...v14bCfg, slots: true };
+export const V16_chars = vsn("v16a-slots(chars)", v16aCfg);
+export const V16_bytes = vsn("v16b-slots(bytes)", v16bCfg);
+
 export const VERSIONS = [
   V1, V2, V_b91, V_b32k,
   V3, V4, V5, V6, V7, V8,
@@ -233,4 +250,5 @@ export const VERSIONS = [
   V13_chars, V13_bytes,
   V14_chars, V14_bytes,
   V15_chars, V15_bytes,
+  V16_chars, V16_bytes,
 ];

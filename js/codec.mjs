@@ -3,7 +3,9 @@
 // and any future Node tooling all import from here.
 
 import { deflateRawSync, inflateRawSync } from "node:zlib";
-import { URL_DICT_STR, URL_PREFIXES } from "./data.mjs";
+import { URL_DICT_STR, URL_PREFIXES, PREFIX_SCHEMAS } from "./data.mjs";
+
+export { PREFIX_SCHEMAS };
 
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder("utf-8");
@@ -178,11 +180,97 @@ const PREFIX_LOOKUP = URL_PREFIXES
   .map((p, i) => ({ idx: i, p }))
   .sort((a, b) => b.p.length - a.p.length);
 
-export function matchPrefix(url) {
-  for (const e of PREFIX_LOOKUP) {
-    if (url.startsWith(e.p)) return { idx: e.idx, rest: url.slice(e.p.length) };
+// ---------- per-prefix typed slots ----------
+//
+// A slot is a fixed-length, fixed-alphabet field that follows a known
+// prefix (e.g. YouTube IDs are 11 chars from b64url after
+// `https://www.youtube.com/watch?v=`). Packing the slot at its actual
+// entropy (~6 bits/char) instead of letting deflate emit each char as
+// an 8-bit literal closes most of the entropy gap on those URLs.
+//
+// Both alphabets fit in 6 bits; b62 wastes 2 codes per char, which is
+// the same byte count as a packed-bigint approach but ~10x simpler.
+export const SLOT_ALPHABETS = {
+  b64url: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  b62:    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+};
+const SLOT_DECODE = {};
+for (const [name, chars] of Object.entries(SLOT_ALPHABETS)) {
+  const m = new Map();
+  for (let i = 0; i < chars.length; i++) m.set(chars[i], i);
+  SLOT_DECODE[name] = m;
+}
+const SLOT_BITS = 6;
+
+export function slotByteLen(charLen) {
+  return Math.ceil((charLen * SLOT_BITS) / 8);
+}
+
+function slotMatches(s, alphabetName) {
+  const decode = SLOT_DECODE[alphabetName];
+  for (let i = 0; i < s.length; i++) if (!decode.has(s[i])) return false;
+  return true;
+}
+
+export function packSlot(s, alphabetName) {
+  const decode = SLOT_DECODE[alphabetName];
+  const out = new Uint8Array(slotByteLen(s.length));
+  let n = 0, bits = 0, bi = 0;
+  for (let i = 0; i < s.length; i++) {
+    n = (n << SLOT_BITS) | decode.get(s[i]);
+    bits += SLOT_BITS;
+    while (bits >= 8) {
+      bits -= 8;
+      out[bi++] = (n >>> bits) & 0xFF;
+      n = n & ((1 << bits) - 1);
+    }
   }
-  return { idx: null, rest: url };
+  if (bits > 0) out[bi++] = (n << (8 - bits)) & 0xFF;
+  return out;
+}
+
+export function unpackSlot(bytes, alphabetName, charLen) {
+  const chars = SLOT_ALPHABETS[alphabetName];
+  let s = "";
+  let n = 0, bits = 0, bi = 0;
+  for (let c = 0; c < charLen; c++) {
+    while (bits < SLOT_BITS) {
+      n = (n << 8) | bytes[bi++];
+      bits += 8;
+    }
+    bits -= SLOT_BITS;
+    const v = (n >>> bits) & ((1 << SLOT_BITS) - 1);
+    s += chars[v];
+    n = n & ((1 << bits) - 1);
+  }
+  return s;
+}
+
+// `useSlots = true`: when a matched prefix has a schema in PREFIX_SCHEMAS
+// AND the URL's slot validates, return the packed slot bytes alongside
+// the rest. If schema validation fails (wrong length / wrong alphabet),
+// keep scanning for a less-specific prefix that doesn't have a schema.
+// `useSlots = false`: legacy behaviour, schemas ignored.
+export function matchPrefix(url, useSlots = false) {
+  for (const e of PREFIX_LOOKUP) {
+    if (!url.startsWith(e.p)) continue;
+    if (useSlots) {
+      const schema = PREFIX_SCHEMAS[e.p];
+      if (schema) {
+        const after = url.slice(e.p.length);
+        if (after.length < schema.len) continue;
+        const slotChars = after.slice(0, schema.len);
+        if (!slotMatches(slotChars, schema.alphabet)) continue;
+        return {
+          idx: e.idx,
+          rest: after.slice(schema.len),
+          slot: packSlot(slotChars, schema.alphabet),
+        };
+      }
+    }
+    return { idx: e.idx, rest: url.slice(e.p.length), slot: null };
+  }
+  return { idx: null, rest: url, slot: null };
 }
 
 // ---------- dict-deflate (Node stdlib zlib) ----------
